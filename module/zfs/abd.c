@@ -858,6 +858,7 @@ abd_get_offset_impl(abd_t *sabd, size_t off, size_t size)
 	zfs_refcount_create(&abd->abd_children);
 	(void) zfs_refcount_add_many(&sabd->abd_children, abd->abd_size, abd);
 
+	abd_verify(abd);
 	return (abd);
 }
 
@@ -904,6 +905,53 @@ abd_get_from_buf(void *buf, size_t size)
 
 	return (abd);
 }
+
+#ifdef _KERNEL
+/*
+ * Allocate a scatter gather ABD structure for pages. You must free this
+ * with abd_put() since the resulting ABD doesn't own its pages.
+ */
+abd_t *
+abd_get_from_pages(struct page **pages, uint_t n_pages)
+{
+	abd_t *abd = abd_alloc_struct();
+	struct sg_table table;
+	gfp_t gfp = __GFP_NOWARN | GFP_NOIO;
+	size_t size = n_pages * PAGE_SIZE;
+	int err;
+
+	VERIFY3U(size, <=, SPA_MAXBLOCKSIZE);
+
+	/*
+	 * Even if this buf is filesystem metadata, we only track that if we
+	 * own the underlying data buffer, which is not true in this case.
+	 * Therefore, we don't ever use ABD_FLAG_META here.
+	 */
+	abd->abd_flags = 0;
+	abd->abd_size = size;
+	abd->abd_parent = NULL;
+	zfs_refcount_create(&abd->abd_children);
+
+	while ((err = sg_alloc_table_from_pages(&table, pages, n_pages, 0,
+	    size, gfp))) {
+		ABDSTAT_BUMP(abdstat_scatter_sg_table_retry);
+		schedule_timeout_interruptible(1);
+		ASSERT3U(err, ==, 0);
+	}
+
+	ABD_SCATTER(abd).abd_offset = 0;
+	ABD_SCATTER(abd).abd_sgl = table.sgl;
+	ABD_SCATTER(abd).abd_nents = table.nents;
+
+	if (table.nents > 1) {
+		ABDSTAT_BUMP(abdstat_scatter_page_multi_chunk);
+		abd->abd_flags |= ABD_FLAG_MULTI_CHUNK;
+	}
+
+	abd_verify(abd);
+	return (abd);
+}
+#endif /* _KERNEL */
 
 /*
  * Free an ABD allocated from abd_get_offset() or abd_get_from_buf(). Will not

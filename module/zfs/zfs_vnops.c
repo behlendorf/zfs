@@ -658,7 +658,7 @@ zfs_write(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 		xuio = (xuio_t *)uio;
 	else
 #endif
-		if (uio_prefaultpages(MIN(n, max_blksz), uio)) {
+		if (uio_prefaultpages(n, uio)) {
 			ZFS_EXIT(zfsvfs);
 			return (SET_ERROR(EFAULT));
 		}
@@ -748,7 +748,7 @@ zfs_write(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 #endif
 		} else if (n >= max_blksz && woff >= zp->z_size &&
 		    P2PHASE(woff, max_blksz) == 0 &&
-		    zp->z_blksz == max_blksz) {
+		    zp->z_blksz == max_blksz && !(ioflag & O_DIRECT)) {
 			/*
 			 * This write covers a full block.  "Borrow" a buffer
 			 * from the dmu so that we can fill it before we enter
@@ -762,10 +762,13 @@ zfs_write(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 			    max_blksz);
 			ASSERT(abuf != NULL);
 			ASSERT(arc_buf_size(abuf) == max_blksz);
-			if ((error = uiocopy(abuf->b_data, max_blksz,
+			while ((error = uiocopy(abuf->b_data, max_blksz,
 			    UIO_WRITE, uio, &cbytes))) {
-				dmu_return_arcbuf(abuf);
-				break;
+				if (error != EFAULT ||
+				    uio_prefaultpages(max_blksz, uio)) {
+					dmu_return_arcbuf(abuf);
+					break;
+				}
 			}
 			ASSERT(cbytes == max_blksz);
 		}
@@ -822,7 +825,14 @@ zfs_write(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 
 		ssize_t tx_bytes;
 		if (abuf == NULL) {
+			if (ioflag & O_DIRECT)
+				uio->uio_extflg |= UIO_DIRECT;
+
 			tx_bytes = uio->uio_resid;
+			/*
+			 * Needed to resolve a deadlock which could occur when
+			 * handlingna page fault in zfs_write
+			 */
 			uio->uio_fault_disable = B_TRUE;
 			error = dmu_write_uio_dbuf(sa_get_db(zp->z_sa_hdl),
 			    uio, nbytes, tx);

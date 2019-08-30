@@ -31,6 +31,15 @@
 #include <asm/uaccess.h>
 #include <sys/types.h>
 
+/*
+ * uio_extflg: extended flags
+ */
+#define	UIO_COPY_DEFAULT 0x0000 /* no special options to copy */
+#define	UIO_COPY_CACHED  0x0001 /* copy should not bypass caches */
+#define	UIO_ASYNC		 0x0002 /* uio_t is reall a uioa_t */
+#define	UIO_XUIO		 0x0004 /* struct is xuio_t */
+#define	UIO_DIRECT		 0x0008 /* request direct I/O */
+
 typedef struct iovec iovec_t;
 
 typedef enum uio_rw {

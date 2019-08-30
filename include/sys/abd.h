@@ -96,6 +96,9 @@ void abd_free(abd_t *);
 abd_t *abd_get_offset(abd_t *, size_t);
 abd_t *abd_get_offset_size(abd_t *, size_t, size_t);
 abd_t *abd_get_from_buf(void *, size_t);
+#ifdef _KERNEL
+abd_t *abd_get_from_pages(struct page **, uint_t);
+#endif
 void abd_put(abd_t *);
 
 /*

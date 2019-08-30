@@ -4418,10 +4418,9 @@ dbuf_write_done(zio_t *zio, arc_buf_t *buf, void *vdb)
 	if (db->db_level == 0) {
 		ASSERT(db->db_blkid != DMU_BONUS_BLKID);
 		ASSERT(dr->dt.dl.dr_override_state == DR_NOT_OVERRIDDEN);
-		if (db->db_state != DB_NOFILL) {
-			if (dr->dt.dl.dr_data != db->db_buf)
-				arc_buf_destroy(dr->dt.dl.dr_data, db);
-		}
+	    /* no dr_data if this is a NO_FILL or direct IO */
+		if (dr->dt.dl.dr_data && dr->dt.dl.dr_data != db->db_buf)
+			arc_buf_destroy(dr->dt.dl.dr_data, db);
 	} else {
 		dnode_t *dn;
 
