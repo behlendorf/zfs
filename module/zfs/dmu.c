@@ -1956,9 +1956,15 @@ dmu_uio_dnode_rw_direct(dnode_t *dn, uio_t *uio, uint64_t size,
 		err = dmu_write_abd(dn, uio->uio_loffset, size,
 		    data, DMU_DIRECTIO, tx);
 	}
-	abd_put(data);
-	for (int i = 0; i < numpages; i++)
+
+	abd_free(data);
+
+	for (int i = 0; i < numpages; i++) {
+		if (read)
+			set_page_dirty_lock(pages[i]);
 		put_page(pages[i]);
+	}
+
 	kmem_free(pages, numpages * sizeof (struct page *));
 	if (err == 0)
 		uioskip(uio, size);

@@ -39,6 +39,10 @@
 extern "C" {
 #endif
 
+#ifndef _KERNEL
+struct page; /* forward declaration to be used in abd.c */
+#endif
+
 typedef enum abd_flags {
 	ABD_FLAG_LINEAR	= 1 << 0,	/* is buffer linear (or scattered)? */
 	ABD_FLAG_OWNER	= 1 << 1,	/* does it own its data buffers? */
@@ -46,6 +50,7 @@ typedef enum abd_flags {
 	ABD_FLAG_MULTI_ZONE  = 1 << 3,	/* pages split over memory zones */
 	ABD_FLAG_MULTI_CHUNK = 1 << 4,	/* pages split over multiple chunks */
 	ABD_FLAG_LINEAR_PAGE = 1 << 5,	/* linear but allocd from page */
+	ABD_FLAG_DIO_PAGE = 1 << 6, /* pages mapped/pinned from user space */
 } abd_flags_t;
 
 typedef struct abd {
@@ -84,6 +89,12 @@ abd_is_linear_page(abd_t *abd)
 	    B_TRUE : B_FALSE);
 }
 
+static inline boolean_t
+abd_has_directio_pages(abd_t *abd)
+{
+	return ((abd->abd_flags & ABD_FLAG_DIO_PAGE) != 0 ? B_TRUE : B_FALSE);
+}
+
 /*
  * Allocations and deallocations
  */
@@ -96,9 +107,7 @@ void abd_free(abd_t *);
 abd_t *abd_get_offset(abd_t *, size_t);
 abd_t *abd_get_offset_size(abd_t *, size_t, size_t);
 abd_t *abd_get_from_buf(void *, size_t);
-#ifdef _KERNEL
 abd_t *abd_get_from_pages(struct page **, uint_t);
-#endif
 void abd_put(abd_t *);
 
 /*

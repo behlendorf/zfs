@@ -441,11 +441,24 @@ abd_alloc_pages(abd_t *abd, size_t size)
 }
 #endif /* !CONFIG_HIGHMEM */
 
+/*
+ * This must be called if any of the sg_table allocation fuctions
+ * are called
+ */
+static void
+abd_free_sg_table(abd_t *abd)
+{
+	struct sg_table table;
+
+	table.sgl = ABD_SCATTER(abd).abd_sgl;
+	table.nents = table.orig_nents = ABD_SCATTER(abd).abd_nents;
+	sg_free_table(&table);
+}
+
 static void
 abd_free_pages(abd_t *abd)
 {
 	struct scatterlist *sg = NULL;
-	struct sg_table table;
 	struct page *page;
 	int nr_pages = ABD_SCATTER(abd).abd_nents;
 	int order, i = 0;
@@ -464,10 +477,7 @@ abd_free_pages(abd_t *abd)
 		ASSERT3U(sg->length, <=, PAGE_SIZE << order);
 		ABDSTAT_BUMPDOWN(abdstat_scatter_orders[order]);
 	}
-
-	table.sgl = ABD_SCATTER(abd).abd_sgl;
-	table.nents = table.orig_nents = nr_pages;
-	sg_free_table(&table);
+	abd_free_sg_table(abd);
 }
 
 #else /* _KERNEL */
@@ -475,8 +485,6 @@ abd_free_pages(abd_t *abd)
 #ifndef PAGE_SHIFT
 #define	PAGE_SHIFT (highbit64(PAGESIZE)-1)
 #endif
-
-struct page;
 
 #define	zfs_kmap_atomic(chunk, km)	((void *)chunk)
 #define	zfs_kunmap_atomic(addr, km)	do { (void)(addr); } while (0)
@@ -497,6 +505,19 @@ sg_init_table(struct scatterlist *sg, int nr)
 	memset(sg, 0, nr * sizeof (struct scatterlist));
 	sg[nr - 1].end = 1;
 }
+
+/*
+ * This must be called if any of the sg_table allocation fuctions
+ * are called
+ */
+static void
+abd_free_sg_table(abd_t *abd)
+{
+	int nents = ABD_SCATTER(abd).abd_nents;
+	vmem_free(ABD_SCATTER(abd).abd_sgl,
+	    nents * sizeof (struct scatterlist));
+}
+
 
 #define	for_each_sg(sgl, sg, nr, i)	\
 	for ((i) = 0, (sg) = (sgl); (i) < (nr); (i)++, (sg) = sg_next(sg))
@@ -557,7 +578,7 @@ abd_free_pages(abd_t *abd)
 		}
 	}
 
-	vmem_free(ABD_SCATTER(abd).abd_sgl, n * sizeof (struct scatterlist));
+	abd_free_sg_table(abd);
 }
 
 #endif /* _KERNEL */
@@ -606,7 +627,7 @@ abd_verify(abd_t *abd)
 	ASSERT3U(abd->abd_size, <=, SPA_MAXBLOCKSIZE);
 	ASSERT3U(abd->abd_flags, ==, abd->abd_flags & (ABD_FLAG_LINEAR |
 	    ABD_FLAG_OWNER | ABD_FLAG_META | ABD_FLAG_MULTI_ZONE |
-	    ABD_FLAG_MULTI_CHUNK | ABD_FLAG_LINEAR_PAGE));
+	    ABD_FLAG_MULTI_CHUNK | ABD_FLAG_LINEAR_PAGE | ABD_FLAG_DIO_PAGE));
 	IMPLY(abd->abd_parent != NULL, !(abd->abd_flags & ABD_FLAG_OWNER));
 	IMPLY(abd->abd_flags & ABD_FLAG_META, abd->abd_flags & ABD_FLAG_OWNER);
 	if (abd_is_linear(abd)) {
@@ -675,6 +696,32 @@ abd_alloc(size_t size, boolean_t is_metadata)
 	    P2ROUNDUP(size, PAGESIZE) - size);
 
 	return (abd);
+}
+
+/*
+ * This is to be called only with abd_get_from_pages()
+ */
+static void
+abd_free_from_pages(abd_t *abd)
+{
+	if (abd->abd_flags & ABD_FLAG_MULTI_CHUNK)
+		ABDSTAT_BUMPDOWN(abdstat_scatter_page_multi_chunk);
+
+	/*
+	 * If the abd buffer was used for Direct IO, we must make sure
+	 * sg_table is freed
+	 */
+	abd_free_sg_table(abd);
+
+	ASSERT(!(abd->abd_flags & ABD_FLAG_OWNER));
+
+	if (abd->abd_parent != NULL) {
+		(void) zfs_refcount_remove_many(&abd->abd_parent->abd_children,
+		    abd->abd_size, abd);
+	}
+
+	zfs_refcount_destroy(&abd->abd_children);
+	abd_free_struct(abd);
 }
 
 static void
@@ -751,19 +798,23 @@ abd_free_linear(abd_t *abd)
 }
 
 /*
- * Free an ABD. Only use this on ABDs allocated with abd_alloc() or
- * abd_alloc_linear().
+ * Free an ABD. Only use this on ABDs allocated with abd_alloc(),
+ * abd_alloc_linear(), or abd_get_from_pages().
  */
 void
 abd_free(abd_t *abd)
 {
 	abd_verify(abd);
 	ASSERT3P(abd->abd_parent, ==, NULL);
-	ASSERT(abd->abd_flags & ABD_FLAG_OWNER);
-	if (abd_is_linear(abd))
-		abd_free_linear(abd);
-	else
-		abd_free_scatter(abd);
+	if (abd_has_directio_pages(abd)) {
+		abd_free_from_pages(abd);
+	} else {
+		ASSERT(abd->abd_flags & ABD_FLAG_OWNER);
+		if (abd_is_linear(abd))
+			abd_free_linear(abd);
+		else
+			abd_free_scatter(abd);
+	}
 }
 
 /*
@@ -909,7 +960,7 @@ abd_get_from_buf(void *buf, size_t size)
 #ifdef _KERNEL
 /*
  * Allocate a scatter gather ABD structure for pages. You must free this
- * with abd_put() since the resulting ABD doesn't own its pages.
+ * with abd_free().
  */
 abd_t *
 abd_get_from_pages(struct page **pages, uint_t n_pages)
@@ -926,8 +977,12 @@ abd_get_from_pages(struct page **pages, uint_t n_pages)
 	 * Even if this buf is filesystem metadata, we only track that if we
 	 * own the underlying data buffer, which is not true in this case.
 	 * Therefore, we don't ever use ABD_FLAG_META here.
+	 *
+	 * Currently, the only consumer of this function is Direct IO
+	 * read/write, so we will add the flag ABD_FLAG_DIO_PAGE.
 	 */
 	abd->abd_flags = 0;
+	abd->abd_flags |= ABD_FLAG_DIO_PAGE;
 	abd->abd_size = size;
 	abd->abd_parent = NULL;
 	zfs_refcount_create(&abd->abd_children);
@@ -944,6 +999,49 @@ abd_get_from_pages(struct page **pages, uint_t n_pages)
 	ABD_SCATTER(abd).abd_nents = table.nents;
 
 	if (table.nents > 1) {
+		ABDSTAT_BUMP(abdstat_scatter_page_multi_chunk);
+		abd->abd_flags |= ABD_FLAG_MULTI_CHUNK;
+	}
+
+	abd_verify(abd);
+	return (abd);
+}
+
+#else /* _KERNEL */
+
+abd_t *
+abd_get_from_pages(struct page **pages, uint_t n_pages)
+{
+	abd_t *abd = abd_alloc_struct();
+	struct scatterlist *sg;
+	size_t size = n_pages * PAGESIZE;
+	int i;
+
+	/*
+	 * Even if this buf is filesystem metadata, we only track that if we
+	 * own the underlying data buffer, which is not true in this case.
+	 * Therefore, we don't ever use ABD_FLAG_META here.
+	 *
+	 * Currently, the only consumer of this function is Direct IO
+	 * read/write, so we will add the flag ABD_FLAG_DIO_PAGE.
+	 */
+	abd->abd_flags = 0;
+	abd->abd_flags |= ABD_FLAG_DIO_PAGE;
+	abd->abd_size = size;
+	abd->abd_parent = NULL;
+	zfs_refcount_create(&abd->abd_children);
+
+	ABD_SCATTER(abd).abd_sgl = vmem_alloc(n_pages *
+	    sizeof (struct scatterlist), KM_SLEEP);
+	sg_init_table(ABD_SCATTER(abd).abd_sgl, n_pages);
+
+	abd_for_each_sg(abd, sg, n_pages, i) {
+		sg_set_page(sg, pages[i], PAGESIZE, 0);
+	}
+	ABD_SCATTER(abd).abd_nents = n_pages;
+	ABD_SCATTER(abd).abd_offset = 0;
+
+	if (ABD_SCATTER(abd).abd_nents > 1) {
 		ABDSTAT_BUMP(abdstat_scatter_page_multi_chunk);
 		abd->abd_flags |= ABD_FLAG_MULTI_CHUNK;
 	}
