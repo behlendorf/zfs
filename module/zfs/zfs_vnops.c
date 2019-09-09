@@ -532,7 +532,7 @@ zfs_read(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 		}
 	}
 #endif /* HAVE_UIO_ZEROCOPY */
-	
+
 	if (ioflag & O_DIRECT)
 		uio->uio_extflg |= UIO_DIRECT;
 

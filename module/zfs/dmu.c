@@ -1957,7 +1957,7 @@ dmu_uio_dnode_rw_direct(dnode_t *dn, uio_t *uio, uint64_t size,
 		    data, DMU_DIRECTIO, tx);
 	}
 
-	abd_free(data);
+	abd_put(data);
 
 	for (int i = 0; i < numpages; i++) {
 		if (read)

@@ -39,10 +39,6 @@
 extern "C" {
 #endif
 
-#ifndef _KERNEL
-struct page; /* forward declaration to be used in abd.c */
-#endif
-
 typedef enum abd_flags {
 	ABD_FLAG_LINEAR	= 1 << 0,	/* is buffer linear (or scattered)? */
 	ABD_FLAG_OWNER	= 1 << 1,	/* does it own its data buffers? */
@@ -107,7 +103,9 @@ void abd_free(abd_t *);
 abd_t *abd_get_offset(abd_t *, size_t);
 abd_t *abd_get_offset_size(abd_t *, size_t, size_t);
 abd_t *abd_get_from_buf(void *, size_t);
+#ifdef _KERNEL
 abd_t *abd_get_from_pages(struct page **, uint_t);
+#endif
 void abd_put(abd_t *);
 
 /*
