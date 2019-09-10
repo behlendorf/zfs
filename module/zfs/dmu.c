@@ -1484,7 +1484,7 @@ dmu_write_direct_done(zio_t *zio)
 
 	mutex_enter(&db->db_mtx);
 	ASSERT(db->db.db_data == NULL);
-	ASSERT(dr->dr_data == NULL);
+	ASSERT(dr->dt.dl.dr_data == NULL);
 	db->db_state = DB_UNCACHED;
 	mutex_exit(&db->db_mtx);
 

@@ -1716,6 +1716,7 @@ dbuf_unoverride(dbuf_dirty_record_t *dr)
 	uint64_t txg = dr->dr_txg;
 
 	ASSERT(MUTEX_HELD(&db->db_mtx));
+
 	/*
 	 * This assert is valid because dmu_sync() expects to be called by
 	 * a zilog's get_data while holding a range lock.  This call only
@@ -1746,7 +1747,13 @@ dbuf_unoverride(dbuf_dirty_record_t *dr)
 	 * the buf thawed to save the effort of freezing &
 	 * immediately re-thawing it.
 	 */
-	arc_release(dr->dt.dl.dr_data, db);
+	if (db->db_state != DB_UNCACHED) {
+		/*
+		 * In the event that Direct IO was used, we do not
+		 * need to release the buffer from the ARC.
+		 */
+		arc_release(dr->dt.dl.dr_data, db);
+	}
 }
 
 /*
@@ -2308,10 +2315,16 @@ dbuf_undirty(dmu_buf_impl_t *db, dmu_tx_t *tx)
 	if (db->db_state != DB_NOFILL) {
 		dbuf_unoverride(dr);
 
-		ASSERT(db->db_buf != NULL);
-		ASSERT(dr->dt.dl.dr_data != NULL);
-		if (dr->dt.dl.dr_data != db->db_buf)
-			arc_buf_destroy(dr->dt.dl.dr_data, db);
+		/*
+		 * In the Direct IO case, the buffer is still dirty, but it
+		 * is UNCACHED, so we to not need to destroy the ARC buffer.
+		 */
+		if (db->db_state != DB_UNCACHED) {
+			ASSERT(db->db_buf != NULL);
+			ASSERT(dr->dt.dl.dr_data != NULL);
+			if (dr->dt.dl.dr_data != db->db_buf)
+				arc_buf_destroy(dr->dt.dl.dr_data, db);
+		}
 	}
 
 	kmem_free(dr, sizeof (dbuf_dirty_record_t));
