@@ -86,20 +86,6 @@
 	(idx) == DMU_OTN_UINT64_DATA || (idx) == DMU_OTN_UINT64_METADATA ? \
 	DMU_OT_UINT64_OTHER : DMU_OT_NUMTYPES)
 
-/*
- * When allocating data from the heap with calloc, this issues a verbose
- * error message in the event that the allocation fails.  The application
- * should exit after this macro is invoked.  The exit is not included here.
- * This takes advantage of some obscure C preprocessor built-ins that
- * provide great diagnostics.  In a later patch other calloc calls should
- * defensively take advantage of this.
- */
-#define	calloc_error(X) { \
-	fprintf(stderr, \
-	    "%s:%d->function %s()Could not allocate Memory for" #X "\n", \
-	    __FILE__, __LINE__, __func__); \
-}
-
 static char *
 zdb_ot_name(dmu_object_type_t type)
 {
@@ -111,6 +97,7 @@ zdb_ot_name(dmu_object_type_t type)
 	else
 		return ("UNKNOWN");
 }
+
 extern int reference_tracking_enable;
 extern int zfs_recover;
 extern uint64_t zfs_arc_min, zfs_arc_max, zfs_arc_meta_min, zfs_arc_meta_limit;
@@ -365,281 +352,6 @@ zdb_nicenum(uint64_t num, char *buf, size_t buflen)
 		nicenum(num, buf, sizeof (buf));
 }
 
-/*
- * Definitions that are local to the dump_size_histograms routine
- *
- * The size of a buffer to hold strings returned by zdb_nicenum
- * C.F. dump_bpobj, char bytes[32] - not to be confused with NN_NUMBUF_SZ
- */
-#define	NUMBUF 32
-
-/* The number of separate histograms processed for psize, lsize and asize */
-#define	NUM_HISTO 3
-
-/* A macro to cause the left alignment of strings in the formatted output */
-#define	negcolwidth ((-1)*colwidth)
-
-/* A macro to print the elements in each row properly for -P output. */
-#define	prtrow_nicenum(number, width) \
-	zdb_nicenum(number, numbuf, sizeof (numbuf)); \
-	if (dump_opt['P']) (void) printf("\t%s", numbuf); \
-	else printf("%*s", width, numbuf);
-
-/*
- * This routine will create a fixed column size output of three different
- * histograms showing:
- * by blocksize of 0 - 2^ SPA_MAXBLOCKSHIT+1 the count, length and
- * cumulative length of the psize, lsize and asize blocks.
- *
- * All three types of blocks are listed on a single line
- *
- * By default the table is printed in nicenumber format (e.g. 123K) but
- * if the '-P' parameter is specified then the full raw number is printed
- * out.
- */
-
-static void
-dump_size_histograms(
-	char *histo0_name, uint64_t *histo0_count, uint64_t *histo0_len,
-	char *histo1_name, uint64_t *histo1_count, uint64_t *histo1_len,
-	char *histo2_name, uint64_t *histo2_count, uint64_t *histo2_len,
-	int block_length)
-{
-	int i, j;
-
-	/*
-	 * keep track of the smallest and largest blocksize used in
-	 * this file system so that we don't print out the block
-	 * sizes that have zero count of blocks used.
-	 */
-	int minidx = block_length - 1;
-	int maxidx = 0;
-	uint64_t max = 0;
-
-	/*
-	 * A temporary buffer that allows us to convert a number into
-	 * a string using zdb_nicenumber to allow either raw or human
-	 * readable numbers to be output.
-	 */
-	char numbuf[NUMBUF];
-	int maxlen = 0;
-	int colwidth = 0;
-	int firstcolwidth = 0;
-
-	/*
-	 * Define titles which are used in the headers of the tables
-	 * printed by this routine.
-	 */
-	const char blocksize_title1[] = "block";
-	const char blocksize_title2[] = "size";
-	const char count_title[] = "Count";
-	const char length_title[] = "Length";
-	const char cumulative_title[] = "Cumulative";
-
-	/*
-	 * Three different sets of histogram data are passed to
-	 * this routine.  We will make reporting the data simpler
-	 * by placing pointers to the histogram data in an array.
-	 */
-	typedef struct one_histo {
-		char *name;
-		uint64_t *count;
-		uint64_t *len;
-		uint64_t cumulative;
-	} one_histo_t;
-	one_histo_t parm_histo[NUM_HISTO];
-
-	/*
-	 * copy the parameters into the array
-	 */
-	parm_histo[0].name = histo0_name;
-	parm_histo[0].count = histo0_count;
-	parm_histo[0].len = histo0_len;
-	parm_histo[0].cumulative = 0;
-
-	parm_histo[1].name = histo1_name;
-	parm_histo[1].count = histo1_count;
-	parm_histo[1].len = histo1_len;
-	parm_histo[1].cumulative = 0;
-
-	parm_histo[2].name = histo2_name;
-	parm_histo[2].count = histo2_count;
-	parm_histo[2].len = histo2_len;
-	parm_histo[2].cumulative = 0;
-
-	/*
-	 * Find the minimum and maximum rows to avoid printing
-	 * all zero rows at the beginning or end of the list.
-	 *
-	 * We are going to special case the instance of blocks
-	 * that are of ZERO bytes in length and report that only
-	 * as an anomaly/curiosity until we figure out why these
-	 * are occuring.
-	 *
-	 * At the same time computer the cumulative fore each
-	 * histogram so we can fing the largest and insure  there
-	 * are enough columns for printing that.
-	 */
-	for (i = 0; i < block_length; i++) {
-		for (j = 0;  j < NUM_HISTO; j++) {
-
-			parm_histo[j].cumulative += parm_histo[j].len[i];
-
-			if (parm_histo[j].len[i] > max)
-				max = parm_histo[j].len[i];
-
-			if (parm_histo[j].count[i] > 0 && i > maxidx)
-				maxidx = i;
-			if (parm_histo[j].count[i] > 0 && i < minidx)
-				minidx = i;
-
-			if (parm_histo[j].len[i] > 0 && i > maxidx)
-				maxidx = i;
-			if (parm_histo[j].len[i] > 0 && i < minidx)
-				minidx = i;
-		}
-	}
-	/*
-	 * The maximum number will be the largest of the cumulatives that
-	 * were computed just above.
-	 */
-	for (j = 0; j < NUM_HISTO; j++) {
-		max = (parm_histo[j].cumulative > max) ?
-		    parm_histo[j].cumulative : max;
-	}
-
-	/*
-	 * Find the number of digits in the largest length
-	 */
-
-	zdb_nicenum(max, numbuf, sizeof (numbuf));
-	maxlen = strlen(numbuf);
-
-	/*
-	 * Set the column width to the maximum of the title strings
-	 * and number of digits in the largest number
-	 */
-	firstcolwidth = (strlen(blocksize_title1) > firstcolwidth) ?
-	    strlen(blocksize_title1) : firstcolwidth;
-	firstcolwidth = (strlen(blocksize_title2) > firstcolwidth) ?
-	    strlen(blocksize_title2) : firstcolwidth;
-
-	colwidth = (strlen(count_title) > colwidth) ?
-	    strlen(count_title) : colwidth;
-	colwidth = (strlen(length_title) > colwidth) ?
-	    strlen(length_title) : colwidth;
-	colwidth = (strlen(cumulative_title) > colwidth) ?
-	    strlen(cumulative_title) : colwidth;
-
-	colwidth = (maxlen > colwidth) ? maxlen : colwidth;
-
-	/*  Add 3 for inter-column spacing */
-	colwidth += 3;
-
-	/*
-	 * zero out the cumulatives
-	 */
-	for (j = 0; j < NUM_HISTO; j++) {
-		parm_histo[j].cumulative = 0;
-	}
-
-	/*
-	 * Print the first line titles
-	 */
-	if (dump_opt['P']) {
-		(void) printf("%s\t", blocksize_title1);
-	} else {
-		(void) printf("%*s ", firstcolwidth, blocksize_title1);
-	}
-
-	for (j = 0; j < NUM_HISTO; j++) {
-		if (dump_opt['P']) {
-			if (j < NUM_HISTO-1) {
-				(void) printf("%s\t\t\t",
-				    parm_histo[j].name);
-			} else {
-				/* Don't print trailing spaces */
-				(void) printf("%s",
-				    parm_histo[j].name);
-			}
-		} else {
-			if (j < NUM_HISTO-1) {
-				(void) printf("%*s%*s%*s",
-				    negcolwidth, parm_histo[j].name,
-				    negcolwidth, " ",
-				    negcolwidth, " ");
-			} else {
-				/* Don't print trailing spaces */
-				(void) printf("   %s",
-				    parm_histo[j].name);
-			}
-		}
-	}
-	(void) printf("\n");
-
-	/*
-	 * Print the second line titles
-	 */
-	if (dump_opt['P']) {
-		(void) printf("%s\t", blocksize_title2);
-	} else {
-		(void) printf("%*s ", firstcolwidth, blocksize_title2);
-	}
-	for (i = 0; i < 3; i++) {
-		if (dump_opt['P']) {
-			(void) printf("%s\t%s\t%s\t",
-			    count_title, length_title, cumulative_title);
-		} else {
-			(void) printf("%*s%*s%*s",
-			    colwidth, count_title,
-			    colwidth, length_title,
-			    colwidth, cumulative_title);
-		}
-	}
-	(void) printf("\n");
-	/*
-	 * Print the rows
-	 */
-	for (i = minidx; i <= maxidx; i++) {
-		uint64_t blksize = 0;
-
-		/*
-		 * Print the first column showing the blocksize
-		 */
-		blksize = ((i-1) != 0) ? 1ULL << (i-1) : 0;
-		zdb_nicenum(blksize, numbuf, sizeof (numbuf));
-
-		if (dump_opt['P']) {
-			printf("%s:\t", numbuf);
-		} else {
-			printf("%*s:", firstcolwidth, numbuf);
-		}
-
-		/*
-		 * Print the remaining set of 3 columns per size:
-		 * for psize, lsize and asize
-		 */
-		for (j = 0; j < NUM_HISTO; j++) {
-			parm_histo[j].cumulative += parm_histo[j].len[i];
-
-			prtrow_nicenum(parm_histo[j].count[i], colwidth);
-			prtrow_nicenum(parm_histo[j].len[i], colwidth);
-			prtrow_nicenum(parm_histo[j].cumulative, colwidth);
-		}
-		(void) printf("\n");
-	}
-} /* dump_size_histogram */
-
-/*
- * undefine these variables/macros that are local to dump_size_histogram
- * dump_histogram
- */
-#undef	NUMBUF
-#undef	NUM_HISTO
-#undef	negcolwidth
-#undef 	prtrow_nicenum
-
-
 static const char histo_stars[] = "****************************************";
 static const uint64_t histo_width = sizeof (histo_stars) - 1;
 
@@ -668,7 +380,7 @@ dump_histogram(const uint64_t *histo, int size, int offset)
 		    i + offset, (u_longlong_t)histo[i],
 		    &histo_stars[(max - histo[i]) * histo_width / max]);
 	}
-} /* dump_histogram */
+}
 
 static void
 dump_zap_stats(objset_t *os, uint64_t object)
@@ -4427,7 +4139,6 @@ typedef struct zdb_blkstats {
 	uint64_t zb_ditto_samevdev;
 	uint64_t zb_ditto_same_ms;
 	uint64_t zb_psize_histogram[PSIZE_HISTO_SIZE];
-
 } zdb_blkstats_t;
 
 /*
@@ -4546,6 +4257,265 @@ bin_search(uint64_t length)
 	return (high);
 } /* bin_search */
 
+/*
+ * Prints the elements in each row properly for -P output.
+ */
+static inline void
+prtrow_nicenum(uint64_t number, int width)
+{
+	char numbuf[32];
+
+	zdb_nicenum(number, numbuf, sizeof (numbuf));
+	if (dump_opt['P'])
+		(void) printf("\t%s", numbuf);
+	else
+		printf("%*s", width, numbuf);
+}
+
+/*
+ * Used to simply reporting of the histogram data.
+ */
+typedef struct one_histo {
+	char *name;
+	uint64_t *count;
+	uint64_t *len;
+	uint64_t cumulative;
+} one_histo_t;
+
+/*
+ * The number of separate histograms processed for psize, lsize and asize.
+ */
+#define	NUM_HISTO 3
+
+/*
+ * This routine will create a fixed column size output of three different
+ * histograms showing:
+ * by blocksize of 0 - 2^ SPA_MAXBLOCKSHIT+1 the count, length and
+ * cumulative length of the psize, lsize and asize blocks.
+ *
+ * All three types of blocks are listed on a single line
+ *
+ * By default the table is printed in nicenumber format (e.g. 123K) but
+ * if the '-P' parameter is specified then the full raw number is printed
+ * out.
+ */
+static void
+dump_size_histograms(zdb_cb_t *zcb)
+{
+	/*
+	 * Keep track of the smallest and largest blocksize used in
+	 * this file system so that we don't print out the block
+	 * sizes that have zero count of blocks used.
+	 */
+	int minidx = SPA_MAXBLOCKSHIFT - 1;
+	int maxidx = 0;
+	uint64_t max = 0;
+
+	/*
+	 * A temporary buffer that allows us to convert a number into
+	 * a string using zdb_nicenumber to allow either raw or human
+	 * readable numbers to be output.
+	 */
+	char numbuf[32];
+	int maxlen = 0;
+	int colwidth = 0;
+	int firstcolwidth = 0;
+
+	/* Make sure the output won't get truncated */
+	CTASSERT(sizeof (numbuf) >= NN_NUMBUF_SZ);
+
+	/*
+	 * Define titles which are used in the headers of the tables
+	 * printed by this routine.
+	 */
+	const char blocksize_title1[] = "block";
+	const char blocksize_title2[] = "size";
+	const char count_title[] = "Count";
+	const char length_title[] = "Length";
+	const char cumulative_title[] = "Cumulative";
+
+	/*
+	 * Setup the histogram arrays (psize, lsize, and asize).
+	 */
+	one_histo_t parm_histo[NUM_HISTO];
+
+	parm_histo[0].name = "psize";
+	parm_histo[0].count = zcb->zcb_psize_count;
+	parm_histo[0].len = zcb->zcb_psize_len;
+	parm_histo[0].cumulative = 0;
+
+	parm_histo[1].name = "lsize";
+	parm_histo[1].count = zcb->zcb_lsize_count;
+	parm_histo[1].len = zcb->zcb_lsize_len;
+	parm_histo[1].cumulative = 0;
+
+	parm_histo[2].name = "asize";
+	parm_histo[2].count = zcb->zcb_asize_count;
+	parm_histo[2].len = zcb->zcb_asize_len;
+	parm_histo[2].cumulative = 0;
+
+	/*
+	 * Find the minimum and maximum rows to avoid printing
+	 * all zero rows at the beginning or end of the list.
+	 *
+	 * We are going to special case the instance of blocks
+	 * that are of ZERO bytes in length and report that only
+	 * as an anomaly/curiosity until we figure out why these
+	 * are occuring.
+	 *
+	 * At the same time compute the cumulative for each
+	 * histogram so we can fing the largest and insure there
+	 * are enough columns for printing that.
+	 */
+	for (int i = 0; i < SPA_MAXBLOCKSHIFT; i++) {
+		for (int j = 0;  j < NUM_HISTO; j++) {
+
+			parm_histo[j].cumulative += parm_histo[j].len[i];
+
+			if (parm_histo[j].len[i] > max)
+				max = parm_histo[j].len[i];
+
+			if (parm_histo[j].count[i] > 0 && i > maxidx)
+				maxidx = i;
+			if (parm_histo[j].count[i] > 0 && i < minidx)
+				minidx = i;
+
+			if (parm_histo[j].len[i] > 0 && i > maxidx)
+				maxidx = i;
+			if (parm_histo[j].len[i] > 0 && i < minidx)
+				minidx = i;
+		}
+	}
+	/*
+	 * The maximum number will be the largest of the cumulatives that
+	 * were computed just above.
+	 */
+	for (int j = 0; j < NUM_HISTO; j++) {
+		max = (parm_histo[j].cumulative > max) ?
+		    parm_histo[j].cumulative : max;
+	}
+
+	/*
+	 * Find the number of digits in the largest length
+	 */
+	zdb_nicenum(max, numbuf, sizeof (numbuf));
+	maxlen = strlen(numbuf);
+
+	/*
+	 * Set the column width to the maximum of the title strings
+	 * and number of digits in the largest number
+	 */
+	firstcolwidth = (strlen(blocksize_title1) > firstcolwidth) ?
+	    strlen(blocksize_title1) : firstcolwidth;
+	firstcolwidth = (strlen(blocksize_title2) > firstcolwidth) ?
+	    strlen(blocksize_title2) : firstcolwidth;
+
+	colwidth = (strlen(count_title) > colwidth) ?
+	    strlen(count_title) : colwidth;
+	colwidth = (strlen(length_title) > colwidth) ?
+	    strlen(length_title) : colwidth;
+	colwidth = (strlen(cumulative_title) > colwidth) ?
+	    strlen(cumulative_title) : colwidth;
+
+	colwidth = (maxlen > colwidth) ? maxlen : colwidth;
+
+	/*  Add 3 for inter-column spacing */
+	colwidth += 3;
+
+	/*
+	 * zero out the cumulatives
+	 */
+	for (int j = 0; j < NUM_HISTO; j++) {
+		parm_histo[j].cumulative = 0;
+	}
+
+	/*
+	 * Print the first line titles
+	 */
+	if (dump_opt['P']) {
+		(void) printf("\n%s\t", blocksize_title1);
+	} else {
+		(void) printf("\n%*s ", firstcolwidth, blocksize_title1);
+	}
+
+	for (int j = 0; j < NUM_HISTO; j++) {
+		if (dump_opt['P']) {
+			if (j < NUM_HISTO-1) {
+				(void) printf("%s\t\t\t",
+				    parm_histo[j].name);
+			} else {
+				/* Don't print trailing spaces */
+				(void) printf("%s",
+				    parm_histo[j].name);
+			}
+		} else {
+			if (j < NUM_HISTO-1) {
+				/* Left aligned strings in the output */
+				(void) printf("%*s%*s%*s",
+				    -colwidth, parm_histo[j].name,
+				    -colwidth, " ", -colwidth, " ");
+			} else {
+				/* Don't print trailing spaces */
+				(void) printf("   %s",
+				    parm_histo[j].name);
+			}
+		}
+	}
+	(void) printf("\n");
+
+	/*
+	 * Print the second line titles
+	 */
+	if (dump_opt['P']) {
+		(void) printf("%s\t", blocksize_title2);
+	} else {
+		(void) printf("%*s ", firstcolwidth, blocksize_title2);
+	}
+	for (int i = 0; i < 3; i++) {
+		if (dump_opt['P']) {
+			(void) printf("%s\t%s\t%s\t",
+			    count_title, length_title, cumulative_title);
+		} else {
+			(void) printf("%*s%*s%*s",
+			    colwidth, count_title,
+			    colwidth, length_title,
+			    colwidth, cumulative_title);
+		}
+	}
+	(void) printf("\n");
+
+	/*
+	 * Print the rows
+	 */
+	for (int i = minidx; i <= maxidx; i++) {
+		uint64_t blksize = 0;
+
+		/*
+		 * Print the first column showing the blocksize
+		 */
+		blksize = ((i-1) != 0) ? 1ULL << (i-1) : 0;
+		zdb_nicenum(blksize, numbuf, sizeof (numbuf));
+
+		if (dump_opt['P']) {
+			printf("%s:\t", numbuf);
+		} else {
+			printf("%*s:", firstcolwidth, numbuf);
+		}
+
+		/*
+		 * Print the remaining set of 3 columns per size:
+		 * for psize, lsize and asize
+		 */
+		for (int j = 0; j < NUM_HISTO; j++) {
+			parm_histo[j].cumulative += parm_histo[j].len[i];
+
+			prtrow_nicenum(parm_histo[j].count[i], colwidth);
+			prtrow_nicenum(parm_histo[j].len[i], colwidth);
+			prtrow_nicenum(parm_histo[j].cumulative, colwidth);
+		}
+		(void) printf("\n");
+	}
+}
 
 static void
 zdb_count_block(zdb_cb_t *zcb, zilog_t *zilog, const blkptr_t *bp,
@@ -5718,32 +5688,10 @@ deleted_livelists_dump_mos(spa_t *spa)
 	iterate_deleted_livelists(spa, dump_livelist_cb, NULL);
 }
 
-/*
- * The size of a buffer to hold strings returned by zdb_nicenum
- */
-#define	NUMBUF 32
-
-/*
- * Define the number of '-b' iterations that will trigger generating a
- * table of block size statistics.  Ideally this should be done for all
- * of the repetitive parameter options that use a specific count of
- * repeated * values to trigger specific actions.  These are not
- * documented in zdb.8, an oversight to be corrected.  These
- * definitions are only for the scope of dump_block_stats
- */
-#define	OPT_B_NUM_GANGED_BLOCKS 3
-#define	OPT_B_PSIZE_HISTOGRAM 4
-#define	OPT_B_HISTOGRAM 5
-
 static int
 dump_block_stats(spa_t *spa)
 {
-	/*
-	 * Due to the size of the new structure, it causes stack
-	 * allocation overflow, which causes core dumps.  Move
-	 * the allocation to the heap
-	 */
-	zdb_cb_t *zcb;
+	zdb_cb_t zcb;
 	zdb_blkstats_t *zb, *tzb;
 	uint64_t norm_alloc, norm_space, total_alloc, total_found;
 	int flags = TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA |
@@ -5752,11 +5700,7 @@ dump_block_stats(spa_t *spa)
 	int e, c, err;
 	bp_embedded_type_t i;
 
-	zcb = (zdb_cb_t *)calloc(1, sizeof (zdb_cb_t));
-	if (zcb == NULL) {
-		calloc_error(zcb);
-		exit(-1);
-	}
+	bzero(&zcb, sizeof (zcb));
 	(void) printf("\nTraversing all blocks %s%s%s%s%s...\n\n",
 	    (dump_opt['c'] || !dump_opt['L']) ? "to verify " : "",
 	    (dump_opt['c'] == 1) ? "metadata " : "",
@@ -5776,37 +5720,38 @@ dump_block_stats(spa_t *spa)
 	 * pool claiming each block we discover, but we skip opening any space
 	 * maps.
 	 */
-	zdb_leak_init(spa, zcb);
+	bzero(&zcb, sizeof (zdb_cb_t));
+	zdb_leak_init(spa, &zcb);
 
 	/*
 	 * If there's a deferred-free bplist, process that first.
 	 */
 	(void) bpobj_iterate_nofree(&spa->spa_deferred_bpobj,
-	    bpobj_count_block_cb, zcb, NULL);
+	    bpobj_count_block_cb, &zcb, NULL);
 
 	if (spa_version(spa) >= SPA_VERSION_DEADLISTS) {
 		(void) bpobj_iterate_nofree(&spa->spa_dsl_pool->dp_free_bpobj,
-		    bpobj_count_block_cb, zcb, NULL);
+		    bpobj_count_block_cb, &zcb, NULL);
 	}
 
-	zdb_claim_removing(spa, zcb);
+	zdb_claim_removing(spa, &zcb);
 
 	if (spa_feature_is_active(spa, SPA_FEATURE_ASYNC_DESTROY)) {
 		VERIFY3U(0, ==, bptree_iterate(spa->spa_meta_objset,
 		    spa->spa_dsl_pool->dp_bptree_obj, B_FALSE, count_block_cb,
-		    zcb, NULL));
+		    &zcb, NULL));
 	}
 
-	deleted_livelists_count_blocks(spa, zcb);
+	deleted_livelists_count_blocks(spa, &zcb);
 
 	if (dump_opt['c'] > 1)
 		flags |= TRAVERSE_PREFETCH_DATA;
 
-	zcb->zcb_totalasize = metaslab_class_get_alloc(spa_normal_class(spa));
-	zcb->zcb_totalasize += metaslab_class_get_alloc(spa_special_class(spa));
-	zcb->zcb_totalasize += metaslab_class_get_alloc(spa_dedup_class(spa));
-	zcb->zcb_start = zcb->zcb_lastprint = gethrtime();
-	err = traverse_pool(spa, 0, flags, zdb_blkptr_cb, zcb);
+	zcb.zcb_totalasize = metaslab_class_get_alloc(spa_normal_class(spa));
+	zcb.zcb_totalasize += metaslab_class_get_alloc(spa_special_class(spa));
+	zcb.zcb_totalasize += metaslab_class_get_alloc(spa_dedup_class(spa));
+	zcb.zcb_start = zcb.zcb_lastprint = gethrtime();
+	err = traverse_pool(spa, 0, flags, zdb_blkptr_cb, &zcb);
 
 	/*
 	 * If we've traversed the data blocks then we need to wait for those
@@ -5827,15 +5772,15 @@ dump_block_stats(spa_t *spa)
 	 * Done after zio_wait() since zcb_haderrors is modified in
 	 * zdb_blkptr_done()
 	 */
-	zcb->zcb_haderrors |= err;
+	zcb.zcb_haderrors |= err;
 
-	if (zcb->zcb_haderrors) {
+	if (zcb.zcb_haderrors) {
 		(void) printf("\nError counts:\n\n");
 		(void) printf("\t%5s  %s\n", "errno", "count");
 		for (e = 0; e < 256; e++) {
-			if (zcb->zcb_errors[e] != 0) {
+			if (zcb.zcb_errors[e] != 0) {
 				(void) printf("\t%5d  %llu\n",
-				    e, (u_longlong_t)zcb->zcb_errors[e]);
+				    e, (u_longlong_t)zcb.zcb_errors[e]);
 			}
 		}
 	}
@@ -5843,9 +5788,9 @@ dump_block_stats(spa_t *spa)
 	/*
 	 * Report any leaked segments.
 	 */
-	leaks |= zdb_leak_fini(spa, zcb);
+	leaks |= zdb_leak_fini(spa, &zcb);
 
-	tzb = &zcb->zcb_type[ZB_TOTAL][ZDB_OT_TOTAL];
+	tzb = &zcb.zcb_type[ZB_TOTAL][ZDB_OT_TOTAL];
 
 	norm_alloc = metaslab_class_get_alloc(spa_normal_class(spa));
 	norm_space = metaslab_class_get_space(spa_normal_class(spa));
@@ -5855,8 +5800,8 @@ dump_block_stats(spa_t *spa)
 	    metaslab_class_get_alloc(spa_special_class(spa)) +
 	    metaslab_class_get_alloc(spa_dedup_class(spa)) +
 	    get_unflushed_alloc_space(spa);
-	total_found = tzb->zb_asize - zcb->zcb_dedup_asize +
-	    zcb->zcb_removing_size + zcb->zcb_checkpoint_size;
+	total_found = tzb->zb_asize - zcb.zcb_dedup_asize +
+	    zcb.zcb_removing_size + zcb.zcb_checkpoint_size;
 
 	if (total_found == total_alloc && !dump_opt['L']) {
 		(void) printf("\n\tNo leaks (block sum matches space"
@@ -5891,9 +5836,9 @@ dump_block_stats(spa_t *spa)
 	    (u_longlong_t)(tzb->zb_asize / tzb->zb_count),
 	    (double)tzb->zb_lsize / tzb->zb_asize);
 	(void) printf("\t%-16s %14llu    ref>1: %6llu   deduplication: %6.2f\n",
-	    "bp deduped:", (u_longlong_t)zcb->zcb_dedup_asize,
-	    (u_longlong_t)zcb->zcb_dedup_blocks,
-	    (double)zcb->zcb_dedup_asize / tzb->zb_asize + 1.0);
+	    "bp deduped:", (u_longlong_t)zcb.zcb_dedup_asize,
+	    (u_longlong_t)zcb.zcb_dedup_blocks,
+	    (double)zcb.zcb_dedup_asize / tzb->zb_asize + 1.0);
 	(void) printf("\t%-16s %14llu     used: %5.2f%%\n", "Normal class:",
 	    (u_longlong_t)norm_alloc, 100.0 * norm_alloc / norm_space);
 
@@ -5920,19 +5865,19 @@ dump_block_stats(spa_t *spa)
 	}
 
 	for (i = 0; i < NUM_BP_EMBEDDED_TYPES; i++) {
-		if (zcb->zcb_embedded_blocks[i] == 0)
+		if (zcb.zcb_embedded_blocks[i] == 0)
 			continue;
 		(void) printf("\n");
 		(void) printf("\tadditional, non-pointer bps of type %u: "
 		    "%10llu\n",
-		    i, (u_longlong_t)zcb->zcb_embedded_blocks[i]);
+		    i, (u_longlong_t)zcb.zcb_embedded_blocks[i]);
 
 		if (dump_opt['b'] >= 3) {
 			(void) printf("\t number of (compressed) bytes:  "
 			    "number of bps\n");
-			dump_histogram(zcb->zcb_embedded_histogram[i],
-			    sizeof (zcb->zcb_embedded_histogram[i]) /
-			    sizeof (zcb->zcb_embedded_histogram[i][0]), 0);
+			dump_histogram(zcb.zcb_embedded_histogram[i],
+			    sizeof (zcb.zcb_embedded_histogram[i]) /
+			    sizeof (zcb.zcb_embedded_histogram[i][0]), 0);
 		}
 	}
 
@@ -5986,7 +5931,7 @@ dump_block_stats(spa_t *spa)
 			else
 				typename = zdb_ot_extname[t - DMU_OT_NUMTYPES];
 
-			if (zcb->zcb_type[ZB_TOTAL][t].zb_asize == 0) {
+			if (zcb.zcb_type[ZB_TOTAL][t].zb_asize == 0) {
 				(void) printf("%6s\t%5s\t%5s\t%5s"
 				    "\t%5s\t%5s\t%6s\t%s\n",
 				    "-",
@@ -6002,7 +5947,7 @@ dump_block_stats(spa_t *spa)
 
 			for (l = ZB_TOTAL - 1; l >= -1; l--) {
 				level = (l == -1 ? ZB_TOTAL : l);
-				zb = &zcb->zcb_type[level][t];
+				zb = &zcb.zcb_type[level][t];
 
 				if (zb->zb_asize == 0)
 					continue;
@@ -6011,7 +5956,7 @@ dump_block_stats(spa_t *spa)
 					continue;
 
 				if (level == 0 && zb->zb_asize ==
-				    zcb->zcb_type[ZB_TOTAL][t].zb_asize)
+				    zcb.zcb_type[ZB_TOTAL][t].zb_asize)
 					continue;
 
 				zdb_nicenum(zb->zb_count, csize,
@@ -6038,14 +5983,12 @@ dump_block_stats(spa_t *spa)
 					(void) printf("    L%d %s\n",
 					    level, typename);
 
-				if ((dump_opt['b'] >=
-				    OPT_B_NUM_GANGED_BLOCKS) &&
-				    (zb->zb_gangs > 0)) {
+				if (dump_opt['b'] >= 3 && zb->zb_gangs > 0) {
 					(void) printf("\t number of ganged "
 					    "blocks: %s\n", gang);
 				}
 
-				if (dump_opt['b'] >= OPT_B_PSIZE_HISTOGRAM) {
+				if (dump_opt['b'] >= 4) {
 					(void) printf("psize "
 					    "(in 512-byte sectors): "
 					    "number of blocks\n");
@@ -6055,46 +5998,22 @@ dump_block_stats(spa_t *spa)
 			}
 		}
 
-		if (dump_opt['b'] >= OPT_B_HISTOGRAM) {
-			char numbuf[NUMBUF];
-
-			(void) printf("\nGrand Totals\n");
-			zdb_nicenum(zcb->zcb_psize_total,
-			    numbuf, sizeof (numbuf));
-			(void) printf("Total Block size psize - %s\n", numbuf);
-			zdb_nicenum(zcb->zcb_lsize_total,
-			    numbuf, sizeof (numbuf));
-			(void) printf("Total Block size lsize - %s\n", numbuf);
-			zdb_nicenum(zcb->zcb_asize_total,
-			    numbuf, sizeof (numbuf));
-			(void) printf("Total Block size asize - %s\n", numbuf);
-		dump_size_histograms(
-		    "psize", zcb->zcb_psize_count, zcb->zcb_psize_len,
-		    "lsize", zcb->zcb_lsize_count, zcb->zcb_lsize_len,
-		    "asize", zcb->zcb_asize_count, zcb->zcb_asize_len,
-		    SPA_MAXBLOCKSHIFT);
+		/* Output a table summarizing block sizes in the pool */
+		if (dump_opt['b'] >= 2) {
+			dump_size_histograms(&zcb);
 		}
 	}
 
 	(void) printf("\n");
 
-	if (leaks) {
-		free(zcb);
+	if (leaks)
 		return (2);
-	}
 
-	if (zcb->zcb_haderrors) {
-		free(zcb);
+	if (zcb.zcb_haderrors)
 		return (3);
-	}
 
-	free(zcb);
 	return (0);
 }
-#undef	OPT_B_NUM_GANGED_BLOCKS
-#undef	OPT_B_PSIZE_HISTOGRAM
-#undef	OPT_B_HISTOGRAM
-#undef	NUMBUF
 
 typedef struct zdb_ddt_entry {
 	ddt_key_t	zdde_key;
