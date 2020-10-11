@@ -2582,6 +2582,13 @@ spa_maxblocksize(spa_t *spa)
 		return (SPA_OLD_MAXBLOCKSIZE);
 }
 
+int
+spa_operation_interrupted(spa_t *spa)
+{
+	if (issig(JUSTLOOKING) && issig(FORREAL))
+		return (SET_ERROR(EINTR));
+	return (0);
+}
 
 /*
  * Returns the txg that the last device removal completed. No indirect mappings
@@ -2862,6 +2869,7 @@ EXPORT_SYMBOL(spa_delegation);
 EXPORT_SYMBOL(spa_meta_objset);
 EXPORT_SYMBOL(spa_maxblocksize);
 EXPORT_SYMBOL(spa_maxdnodesize);
+EXPORT_SYMBOL(spa_operation_interrupted);
 
 /* Miscellaneous support routines */
 EXPORT_SYMBOL(spa_guid_exists);

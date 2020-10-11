@@ -2978,11 +2978,10 @@ dmu_recv_stream(dmu_recv_cookie_t *drc, offset_t *voffp)
 	 * it.  Finally, if receive_read_record fails or we're at the end of the
 	 * stream, then we free drc->drc_rrd and exit.
 	 */
-	while (rwa->err == 0) {
-		if (issig(JUSTLOOKING) && issig(FORREAL)) {
-			err = SET_ERROR(EINTR);
+	while (rwa->err == 0 && err == 0) {
+		err = spa_operation_interrupted(dmu_objset_spa(rwa->os));
+		if (err)
 			break;
-		}
 
 		ASSERT3P(drc->drc_rrd, ==, NULL);
 		drc->drc_rrd = drc->drc_next_rrd;

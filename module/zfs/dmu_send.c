@@ -2487,6 +2487,14 @@ dmu_send_impl(struct dmu_send_params *dspp)
 		}
 	}
 
+	/*
+	 * Last chance, bail if possible at this point, now that the send is
+	 * registered and can be cancelled by signalling this thread.
+	 */
+	err = spa_operation_interrupted(os->os_spa);
+	if (err != 0)
+		goto out;
+
 	if (resuming || book_resuming) {
 		err = setup_resume_points(dspp, to_arg, from_arg,
 		    rlt_arg, smt_arg, resuming, os, redact_rl, nvl);
@@ -2534,8 +2542,8 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	while (err == 0 && !range->eos_marker) {
 		err = do_dump(&dsc, range);
 		range = get_next_range(&srt_arg->q, range);
-		if (issig(JUSTLOOKING) && issig(FORREAL))
-			err = SET_ERROR(EINTR);
+		if (err == 0)
+			err = spa_operation_interrupted(os->os_spa);
 	}
 
 	/*

@@ -1159,6 +1159,8 @@ extern void spa_history_log_internal_dd(dsl_dir_t *dd, const char *operation,
 
 extern const char *spa_state_to_name(spa_t *spa);
 
+extern int spa_operation_interrupted(spa_t *spa);
+
 /* error handling */
 struct zbookmark_phys;
 extern void spa_log_error(spa_t *spa, const zbookmark_phys_t *zb);
