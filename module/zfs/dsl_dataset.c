@@ -561,8 +561,8 @@ dsl_dataset_try_add_ref(dsl_pool_t *dp, dsl_dataset_t *ds, void *tag)
 }
 
 int
-dsl_dataset_hold_obj(dsl_pool_t *dp, uint64_t dsobj, void *tag,
-    dsl_dataset_t **dsp)
+dsl_dataset_hold_obj_flags(dsl_pool_t *dp, uint64_t dsobj,
+    ds_hold_flags_t flags, void *tag, dsl_dataset_t **dsp)
 {
 	objset_t *mos = dp->dp_meta_objset;
 	dmu_buf_t *dbuf;
@@ -726,6 +726,15 @@ dsl_dataset_hold_obj(dsl_pool_t *dp, uint64_t dsobj, void *tag,
 		}
 	}
 
+	if (err == 0 && (flags & DS_HOLD_FLAG_DECRYPT)) {
+		err = dsl_dataset_create_key_mapping(ds);
+		if (err != 0)
+			dsl_dataset_rele(ds, tag);
+	}
+
+	if (err != 0)
+		return (err);
+
 	ASSERT3P(ds->ds_dbuf, ==, dbuf);
 	ASSERT3P(dsl_dataset_phys(ds), ==, dbuf->db_data);
 	ASSERT(dsl_dataset_phys(ds)->ds_prev_snap_obj != 0 ||
@@ -749,24 +758,10 @@ dsl_dataset_create_key_mapping(dsl_dataset_t *ds)
 }
 
 int
-dsl_dataset_hold_obj_flags(dsl_pool_t *dp, uint64_t dsobj,
-    ds_hold_flags_t flags, void *tag, dsl_dataset_t **dsp)
+dsl_dataset_hold_obj(dsl_pool_t *dp, uint64_t dsobj, void *tag,
+    dsl_dataset_t **dsp)
 {
-	int err;
-
-	err = dsl_dataset_hold_obj(dp, dsobj, tag, dsp);
-	if (err != 0)
-		return (err);
-
-	ASSERT3P(*dsp, !=, NULL);
-
-	if (flags & DS_HOLD_FLAG_DECRYPT) {
-		err = dsl_dataset_create_key_mapping(*dsp);
-		if (err != 0)
-			dsl_dataset_rele(*dsp, tag);
-	}
-
-	return (err);
+	return (dsl_dataset_hold_obj_flags(dp, dsobj, 0, tag, dsp));
 }
 
 int
