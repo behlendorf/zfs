@@ -84,14 +84,25 @@ extern void txg_kick(struct dsl_pool *dp);
  * Wait until the given transaction group has finished syncing.
  * Try to make this happen as soon as possible (eg. kick off any
  * necessary syncs immediately).  If txg==0, wait for the currently open
- * txg to finish syncing.
+ * txg to finish syncing.  This may be interrupted due to an exiting pool.
+ *
+ * If desired, flags can be specified using txg_wait_synced_tx(), in case
+ * the caller wants to be interruptible.
  */
-extern void txg_wait_synced(struct dsl_pool *dp, uint64_t txg);
+typedef enum {
+	/* Reject the call with EINTR upon receiving a signal. */
+	TXG_WAIT_F_SIGNAL	= (1U << 0),
+} txg_wait_flag_t;
+extern int txg_wait_synced(struct dsl_pool *dp, uint64_t txg);
+extern int txg_wait_synced_tx(struct dsl_pool *dp, uint64_t txg,
+    struct dmu_tx *tx, txg_wait_flag_t flags);
 
 /*
- * Wait as above. Returns true if the thread was signaled while waiting.
+ * Similar to a txg_wait_synced but it can be interrupted from a signal.
+ * Returns B_TRUE if the thread was signaled while waiting.
  */
-extern boolean_t txg_wait_synced_sig(struct dsl_pool *dp, uint64_t txg);
+#define	txg_wait_synced_sig(dp, txg)				\
+	txg_wait_synced_tx(dp, txg, NULL, TXG_WAIT_F_SIGNAL)
 
 /*
  * Wait until the given transaction group, or one after it, is
