@@ -122,13 +122,16 @@ zfs_refcount_count(zfs_refcount_t *rc)
 }
 
 int64_t
-zfs_refcount_add_many(zfs_refcount_t *rc, uint64_t number, const void *holder)
+_zfs_refcount_add_many(zfs_refcount_t *rc, uint64_t number, const void *holder,
+    const char *file, size_t line)
 {
 	reference_t *ref = NULL;
 	int64_t count;
 
 	if (rc->rc_tracked) {
 		ref = kmem_cache_alloc(reference_cache, KM_SLEEP);
+		ref->ref_file = file;
+		ref->ref_line = line;
 		ref->ref_holder = holder;
 		ref->ref_number = number;
 	}
@@ -144,9 +147,10 @@ zfs_refcount_add_many(zfs_refcount_t *rc, uint64_t number, const void *holder)
 }
 
 int64_t
-zfs_refcount_add(zfs_refcount_t *rc, const void *holder)
+_zfs_refcount_add(zfs_refcount_t *rc, const void *holder, const char *file,
+    size_t line)
 {
-	return (zfs_refcount_add_many(rc, 1, holder));
+	return (_zfs_refcount_add_many(rc, 1, holder, file, line));
 }
 
 int64_t
