@@ -1530,6 +1530,7 @@ zfs_domount(struct super_block *sb, zfs_mnt_t *zm, int silent)
 	error = zfs_root(zfsvfs, &root_inode);
 	if (error) {
 		(void) zfs_umount(sb);
+		zfsvfs = NULL;
 		goto out;
 	}
 
@@ -1537,6 +1538,7 @@ zfs_domount(struct super_block *sb, zfs_mnt_t *zm, int silent)
 	sb->s_root = d_make_root(root_inode);
 	if (sb->s_root == NULL) {
 		(void) zfs_umount(sb);
+		zfsvfs = NULL;
 		error = SET_ERROR(ENOMEM);
 		goto out;
 	}
