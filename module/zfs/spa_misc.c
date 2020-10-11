@@ -455,45 +455,26 @@ spa_config_lock_destroy(spa_t *spa)
 	}
 }
 
-int
-spa_config_tryenter(spa_t *spa, int locks, void *tag, krw_t rw)
+static int
+spa_config_eval_flags(spa_t *spa, spa_config_flag_t flags)
 {
-	for (int i = 0; i < SCL_LOCKS; i++) {
-		spa_config_lock_t *scl = &spa->spa_config_lock[i];
-		if (!(locks & (1 << i)))
-			continue;
-		mutex_enter(&scl->scl_lock);
-		if (rw == RW_READER) {
-			if (scl->scl_writer || scl->scl_write_wanted) {
-				mutex_exit(&scl->scl_lock);
-				spa_config_exit(spa, locks & ((1 << i) - 1),
-				    tag);
-				return (0);
-			}
-		} else {
-			ASSERT(scl->scl_writer != curthread);
-			if (!zfs_refcount_is_zero(&scl->scl_count)) {
-				mutex_exit(&scl->scl_lock);
-				spa_config_exit(spa, locks & ((1 << i) - 1),
-				    tag);
-				return (0);
-			}
-			scl->scl_writer = curthread;
-		}
-		(void) zfs_refcount_add(&scl->scl_count, tag);
-		mutex_exit(&scl->scl_lock);
-	}
-	return (1);
+	int error = 0;
+
+	if ((flags & SCL_FLAG_TRYENTER) != 0)
+		error = SET_ERROR(EAGAIN);
+	return (error);
 }
 
-void
-spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw)
+int
+spa_config_enter_flags(spa_t *spa, int locks, const void *tag, krw_t rw,
+    spa_config_flag_t flags)
 {
+	int error = 0;
 	int wlocks_held = 0;
 
 	ASSERT3U(SCL_LOCKS, <, sizeof (wlocks_held) * NBBY);
 
-	for (int i = 0; i < SCL_LOCKS; i++) {
+	for (int i = 0; error == 0 && i < SCL_LOCKS; i++) {
 		spa_config_lock_t *scl = &spa->spa_config_lock[i];
 		if (scl->scl_writer == curthread)
 			wlocks_held |= (1 << i);
@@ -502,21 +483,51 @@ spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw)
 		mutex_enter(&scl->scl_lock);
 		if (rw == RW_READER) {
 			while (scl->scl_writer || scl->scl_write_wanted) {
+				error = spa_config_eval_flags(spa, flags);
+				if (error != 0)
+					break;
 				cv_wait(&scl->scl_cv, &scl->scl_lock);
 			}
 		} else {
 			ASSERT(scl->scl_writer != curthread);
 			while (!zfs_refcount_is_zero(&scl->scl_count)) {
+				error = spa_config_eval_flags(spa, flags);
+				if (error != 0)
+					break;
 				scl->scl_write_wanted++;
 				cv_wait(&scl->scl_cv, &scl->scl_lock);
 				scl->scl_write_wanted--;
 			}
-			scl->scl_writer = curthread;
+			if (error == 0)
+				scl->scl_writer = curthread;
 		}
-		(void) zfs_refcount_add(&scl->scl_count, tag);
+		if (error == 0)
+			(void) zfs_refcount_add(&scl->scl_count, tag);
 		mutex_exit(&scl->scl_lock);
+
+		if (error != 0 && i > 0) {
+			/* Should never happen for classic spa_config_enter. */
+			ASSERT3U(flags, !=, 0);
+			spa_config_exit(spa, locks & ((1 << i) - 1), tag);
+		}
 	}
+
 	ASSERT3U(wlocks_held, <=, locks);
+	return (error);
+}
+
+void
+spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw)
+{
+	spa_config_enter_flags(spa, locks, tag, rw, /*flags*/0);
+}
+
+int
+spa_config_tryenter(spa_t *spa, int locks, void *tag, krw_t rw)
+{
+
+	return (spa_config_enter_flags(spa, locks, tag, rw,
+	    SCL_FLAG_TRYENTER) == 0);
 }
 
 void

@@ -975,6 +975,12 @@ extern void spa_iostats_trim_add(spa_t *spa, trim_type_t type,
     uint64_t extents_written, uint64_t bytes_written,
     uint64_t extents_skipped, uint64_t bytes_skipped,
     uint64_t extents_failed, uint64_t bytes_failed);
+
+/* Config lock handling flags */
+typedef enum {
+	SCL_FLAG_TRYENTER	= 1U << 0,
+} spa_config_flag_t;
+
 extern void spa_import_progress_add(spa_t *spa);
 extern void spa_import_progress_remove(uint64_t spa_guid);
 extern int spa_import_progress_set_mmp_check(uint64_t pool_guid,
@@ -986,6 +992,8 @@ extern int spa_import_progress_set_state(uint64_t pool_guid,
 
 /* Pool configuration locks */
 extern int spa_config_tryenter(spa_t *spa, int locks, void *tag, krw_t rw);
+extern int spa_config_enter_flags(spa_t *spa, int locks, const void *tag, krw_t rw,
+    spa_config_flag_t flags);
 extern void spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw);
 extern void spa_config_exit(spa_t *spa, int locks, const void *tag);
 extern int spa_config_held(spa_t *spa, int locks, krw_t rw);
