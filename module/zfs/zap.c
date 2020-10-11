@@ -519,6 +519,11 @@ zap_get_leaf_byblk(zap_t *zap, uint64_t blkid, dmu_tx_t *tx, krw_t lt,
     zap_leaf_t **lp)
 {
 	dmu_buf_t *db;
+	zap_leaf_t *l;
+	int bs = FZAP_BLOCK_SHIFT(zap);
+	int err;
+	dnode_t *dn;
+	zap_leaf_phys_t *zap_phys;
 
 	ASSERT(RW_LOCK_HELD(&zap->zap_rwlock));
 
@@ -532,9 +537,8 @@ zap_get_leaf_byblk(zap_t *zap, uint64_t blkid, dmu_tx_t *tx, krw_t lt,
 	if (blkid == 0)
 		return (SET_ERROR(ENOENT));
 
-	int bs = FZAP_BLOCK_SHIFT(zap);
-	dnode_t *dn = dmu_buf_dnode_enter(zap->zap_dbuf);
-	int err = dmu_buf_hold_by_dnode(dn,
+	dn = dmu_buf_dnode_enter(zap->zap_dbuf);
+	err = dmu_buf_hold_by_dnode(dn,
 	    blkid << bs, NULL, &db, DMU_READ_NO_PREFETCH);
 	dmu_buf_dnode_exit(zap->zap_dbuf);
 	if (err != 0)
@@ -545,7 +549,14 @@ zap_get_leaf_byblk(zap_t *zap, uint64_t blkid, dmu_tx_t *tx, krw_t lt,
 	ASSERT3U(db->db_size, ==, 1 << bs);
 	ASSERT(blkid != 0);
 
-	zap_leaf_t *l = dmu_buf_get_user(db);
+	zap_phys = db->db_data;
+	if (zap_phys->l_hdr.lh_block_type != ZBT_LEAF ||
+	    zap_phys->l_hdr.lh_magic != ZAP_LEAF_MAGIC) {
+		dmu_buf_rele(db, NULL);
+		return (SET_ERROR(EIO));
+	}
+
+	l = dmu_buf_get_user(db);
 
 	if (l == NULL)
 		l = zap_open_leaf(blkid, db);
@@ -559,8 +570,6 @@ zap_get_leaf_byblk(zap_t *zap, uint64_t blkid, dmu_tx_t *tx, krw_t lt,
 		dmu_buf_will_dirty(db, tx);
 	ASSERT3U(l->l_blkid, ==, blkid);
 	ASSERT3P(l->l_dbuf, ==, db);
-	ASSERT3U(zap_leaf_phys(l)->l_hdr.lh_block_type, ==, ZBT_LEAF);
-	ASSERT3U(zap_leaf_phys(l)->l_hdr.lh_magic, ==, ZAP_LEAF_MAGIC);
 
 	*lp = l;
 	return (0);

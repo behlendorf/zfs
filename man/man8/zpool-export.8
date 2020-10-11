@@ -38,6 +38,7 @@
 .Cm export
 .Op Fl a
 .Op Fl f
+.Op Fl F
 .Ar pool Ns ...
 .Sh DESCRIPTION
 .Bl -tag -width Ds
@@ -72,11 +73,19 @@ Exports all pools imported on the system.
 Forcefully unmount all datasets, using the
 .Nm unmount Fl f
 command.
-This option is not supported on Linux.
+This option is not supported on Linux, in that dataset activity will not be
+forcibly stopped or pushed off.
 .Pp
 This command will forcefully export the pool even if it has a shared spare that
 is currently being used.
 This may lead to potential data corruption.
+.It Fl F
+Forcibly export the pool, attempting to stop all activity, and then dropping
+any dirty data.
+.Pp
+This flag is intended primarily for users that have lost their backing disk
+and find it acceptable to rely on transaction recovery to re-import the pool
+at a later time.
 .El
 .El
 .Sh SEE ALSO

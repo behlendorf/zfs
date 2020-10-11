@@ -1298,6 +1298,8 @@ spa_activate(spa_t *spa, spa_mode_t mode)
 static void
 spa_deactivate(spa_t *spa)
 {
+	int error;
+
 	ASSERT(spa->spa_sync_on == B_FALSE);
 	ASSERT(spa->spa_dsl_pool == NULL);
 	ASSERT(spa->spa_root_vdev == NULL);
@@ -1337,8 +1339,14 @@ spa_deactivate(spa_t *spa)
 
 	for (size_t i = 0; i < TXG_SIZE; i++) {
 		ASSERT3P(spa->spa_txg_zio[i], !=, NULL);
-		VERIFY0(zio_wait(spa->spa_txg_zio[i]));
+		error = zio_wait(spa->spa_txg_zio[i]);
+		VERIFY(error == 0 || (spa_exiting_any(spa) && error == EIO));
 		spa->spa_txg_zio[i] = NULL;
+	}
+
+	if (spa_exiting_any(spa)) {
+		metaslab_class_force_discard(spa->spa_normal_class);
+		metaslab_class_force_discard(spa->spa_log_class);
 	}
 
 	metaslab_class_destroy(spa->spa_normal_class);
@@ -1467,7 +1475,12 @@ static void
 spa_unload_log_sm_flush_all(spa_t *spa)
 {
 	dmu_tx_t *tx = dmu_tx_create_dd(spa_get_dsl(spa)->dp_mos_dir);
-	VERIFY0(dmu_tx_assign(tx, TXG_WAIT));
+	int txerr = dmu_tx_assign(tx, TXG_WAIT);
+	if (txerr != 0) {
+		ASSERT(spa_exiting_any(spa));
+		dmu_tx_abort(tx);
+		return;
+	}
 
 	ASSERT3U(spa->spa_log_flushall_txg, ==, 0);
 	spa->spa_log_flushall_txg = dmu_tx_get_txg(tx);
@@ -1523,9 +1536,13 @@ spa_destroy_aux_threads(spa_t *spa)
 /*
  * Opposite of spa_load().
  */
-static void
-spa_unload(spa_t *spa)
+static int
+spa_unload(spa_t *spa, uint64_t txg_how)
 {
+	int err;
+	vdev_t *vd;
+	uint64_t t, txg;
+
 	ASSERT(MUTEX_HELD(&spa_namespace_lock));
 	ASSERT(spa_state(spa) != POOL_STATE_UNINITIALIZED);
 
@@ -1560,8 +1577,43 @@ spa_unload(spa_t *spa)
 	 * Stop syncing.
 	 */
 	if (spa->spa_sync_on) {
-		txg_sync_stop(spa->spa_dsl_pool);
+		err = txg_sync_stop(spa->spa_dsl_pool, txg_how);
+		if (err != 0) {
+			spa_async_resume(spa);
+			return (err);
+		}
 		spa->spa_sync_on = B_FALSE;
+	}
+
+	/*
+	 * If the pool is being forcibly exported, it may be necessary to
+	 * cleanup again.  This normally would be handled by spa_sync(),
+	 * except it's possible that followup txg's were skipped, and
+	 * thus the opportunity to have performed these operations.
+	 *
+	 * This is the correct place to perform these operations, as just
+	 * now, spa_sync() and vdev activity has been stopped, and after
+	 * here, the metaslabs are destroyed.
+	 */
+	if (spa_exiting_any(spa)) {
+		spa_config_enter(spa, SCL_ALL, spa, RW_WRITER);
+		while ((vd = list_head(&spa->spa_config_dirty_list)) != NULL)
+			vdev_config_clean(vd);
+		while ((vd = list_head(&spa->spa_state_dirty_list)) != NULL)
+			vdev_state_clean(vd);
+		/* The only dirty entries should be for spa_syncing_txg + 1. */
+		t = 0;
+		txg = spa_syncing_txg(spa) + 1;
+		while (t < TXG_SIZE) {
+			vd = txg_list_remove(&spa->spa_vdev_txg_list, t);
+			if (vd == NULL) {
+				t++;
+				continue;
+			}
+			VERIFY3U(t, ==, txg & TXG_MASK);
+			vdev_sync_done(vd, txg);
+		}
+		spa_config_exit(spa, SCL_ALL, spa);
 	}
 
 	/*
@@ -1664,6 +1716,7 @@ spa_unload(spa_t *spa)
 	}
 
 	spa_config_exit(spa, SCL_ALL, spa);
+	return (0);
 }
 
 /*
@@ -2488,6 +2541,7 @@ spa_livelist_delete_cb(void *arg, zthr_t *z)
 	uint64_t ll_obj = 0, count;
 	objset_t *mos = spa->spa_meta_objset;
 	uint64_t zap_obj = spa->spa_livelists_to_delete;
+	int err;
 	/*
 	 * Determine the next livelist to delete. This function should only
 	 * be called if there is at least one deleted clone.
@@ -2503,7 +2557,7 @@ spa_livelist_delete_cb(void *arg, zthr_t *z)
 		dle = dsl_deadlist_first(ll);
 		ASSERT3P(dle, !=, NULL);
 		bplist_create(&to_free);
-		int err = dsl_process_sub_livelist(&dle->dle_bpobj, &to_free,
+		err = dsl_process_sub_livelist(&dle->dle_bpobj, &to_free,
 		    z, NULL);
 		if (err == 0) {
 			sublist_delete_arg_t sync_arg = {
@@ -2515,9 +2569,10 @@ spa_livelist_delete_cb(void *arg, zthr_t *z)
 			zfs_dbgmsg("deleting sublist (id %llu) from"
 			    " livelist %llu, %d remaining",
 			    dle->dle_bpobj.bpo_object, ll_obj, count - 1);
-			VERIFY0(dsl_sync_task(spa_name(spa), NULL,
+			err = dsl_sync_task(spa_name(spa), NULL,
 			    sublist_delete_sync, &sync_arg, 0,
-			    ZFS_SPACE_CHECK_DESTROY));
+			    ZFS_SPACE_CHECK_DESTROY);
+			VERIFY(err == 0 || spa_exiting_any(spa));
 		} else {
 			VERIFY3U(err, ==, EINTR);
 		}
@@ -2532,8 +2587,9 @@ spa_livelist_delete_cb(void *arg, zthr_t *z)
 		    .zap_obj = zap_obj
 		};
 		zfs_dbgmsg("deletion of livelist %llu completed", ll_obj);
-		VERIFY0(dsl_sync_task(spa_name(spa), NULL, livelist_delete_sync,
-		    &sync_arg, 0, ZFS_SPACE_CHECK_DESTROY));
+		err = dsl_sync_task(spa_name(spa), NULL, livelist_delete_sync,
+		    &sync_arg, 0, ZFS_SPACE_CHECK_DESTROY);
+		VERIFY(err == 0 || spa_exiting_any(spa));
 	}
 }
 
@@ -4373,7 +4429,7 @@ spa_ld_prepare_for_reload(spa_t *spa)
 	spa_mode_t mode = spa->spa_mode;
 	int async_suspended = spa->spa_async_suspended;
 
-	spa_unload(spa);
+	VERIFY0(spa_unload(spa, 0));
 	spa_deactivate(spa);
 	spa_activate(spa, mode);
 
@@ -4889,7 +4945,7 @@ spa_load_retry(spa_t *spa, spa_load_state_t state)
 {
 	spa_mode_t mode = spa->spa_mode;
 
-	spa_unload(spa);
+	VERIFY0(spa_unload(spa, 0));
 	spa_deactivate(spa);
 
 	spa->spa_load_max_txg = spa->spa_uberblock.ub_txg - 1;
@@ -5051,6 +5107,16 @@ spa_open_common(const char *pool, spa_t **spapp, void *tag, nvlist_t *nvpolicy,
 		return (SET_ERROR(ENOENT));
 	}
 
+	/*
+	 * If the pool is exiting, only the thread forcing it to exit may
+	 * open new references to it.
+	 */
+	if (spa_exiting(spa)) {
+		if (locked)
+			mutex_exit(&spa_namespace_lock);
+		return (SET_ERROR(ENXIO));
+	}
+
 	if (spa->spa_state == POOL_STATE_UNINITIALIZED) {
 		zpool_load_policy_t policy;
 
@@ -5079,7 +5145,7 @@ spa_open_common(const char *pool, spa_t **spapp, void *tag, nvlist_t *nvpolicy,
 			 * this is the case, the config cache is out of sync and
 			 * we should remove the pool from the namespace.
 			 */
-			spa_unload(spa);
+			VERIFY0(spa_unload(spa, 0));
 			spa_deactivate(spa);
 			spa_write_cachefile(spa, B_TRUE, B_TRUE);
 			spa_remove(spa);
@@ -5101,7 +5167,7 @@ spa_open_common(const char *pool, spa_t **spapp, void *tag, nvlist_t *nvpolicy,
 				    ZPOOL_CONFIG_LOAD_INFO,
 				    spa->spa_load_info) == 0);
 			}
-			spa_unload(spa);
+			VERIFY0(spa_unload(spa, 0));
 			spa_deactivate(spa);
 			spa->spa_last_open_failed = error;
 			if (locked)
@@ -5775,7 +5841,7 @@ spa_create(const char *pool, nvlist_t *nvroot, nvlist_t *props,
 	spa_config_exit(spa, SCL_ALL, FTAG);
 
 	if (error != 0) {
-		spa_unload(spa);
+		VERIFY0(spa_unload(spa, 0));
 		spa_deactivate(spa);
 		spa_remove(spa);
 		mutex_exit(&spa_namespace_lock);
@@ -6034,14 +6100,12 @@ spa_import(char *pool, nvlist_t *config, nvlist_t *props, uint64_t flags)
 
 	if (error != 0 || (props && spa_writeable(spa) &&
 	    (error = spa_prop_set(spa, props)))) {
-		spa_unload(spa);
+		VERIFY0(spa_unload(spa, 0));
 		spa_deactivate(spa);
 		spa_remove(spa);
 		mutex_exit(&spa_namespace_lock);
 		return (error);
 	}
-
-	spa_async_resume(spa);
 
 	/*
 	 * Override any spares and level 2 cache devices as specified by
@@ -6090,8 +6154,20 @@ spa_import(char *pool, nvlist_t *config, nvlist_t *props, uint64_t flags)
 		/*
 		 * Update the config cache to include the newly-imported pool.
 		 */
-		spa_config_update(spa, SPA_CONFIG_UPDATE_POOL);
+		mutex_exit(&spa_namespace_lock);
+		error = spa_config_update_pool(spa);
+		if (error != 0) {
+			mutex_enter(&spa_namespace_lock);
+			VERIFY0(spa_unload(spa, 0));
+			spa_deactivate(spa);
+			spa_remove(spa);
+			mutex_exit(&spa_namespace_lock);
+			return (error);
+		}
+		mutex_enter(&spa_namespace_lock);
 	}
+
+	spa_async_resume(spa);
 
 	/*
 	 * It's possible that the pool was expanded while it was exported.
@@ -6215,12 +6291,23 @@ spa_tryimport(nvlist_t *tryconfig)
 		spa_config_exit(spa, SCL_CONFIG, FTAG);
 	}
 
-	spa_unload(spa);
+	VERIFY0(spa_unload(spa, 0));
 	spa_deactivate(spa);
 	spa_remove(spa);
 	mutex_exit(&spa_namespace_lock);
 
 	return (config);
+}
+
+static void
+spa_set_killer(spa_t *spa, void *killer)
+{
+
+	mutex_enter(&spa->spa_evicting_os_lock);
+	spa->spa_killer = killer;
+	if (killer != NULL)
+		txg_completion_notify(spa_get_dsl(spa));
+	mutex_exit(&spa->spa_evicting_os_lock);
 }
 
 /*
@@ -6238,6 +6325,8 @@ spa_export_common(const char *pool, int new_state, nvlist_t **oldconfig,
 {
 	int error;
 	spa_t *spa;
+	boolean_t force_removal, modifying;
+	uint64_t txg_how;
 
 	if (oldconfig)
 		*oldconfig = NULL;
@@ -6258,13 +6347,49 @@ spa_export_common(const char *pool, int new_state, nvlist_t **oldconfig,
 	}
 	spa->spa_is_exporting = B_TRUE;
 
+	/* XXX Should this be chained instead of rejected? */
+	if (spa_exiting(spa)) {
+		mutex_exit(&spa_namespace_lock);
+		return (SET_ERROR(EBUSY));
+	}
+
+	modifying = spa->spa_sync_on && (new_state == POOL_STATE_DESTROYED ||
+	    new_state == POOL_STATE_EXPORTED);
+
 	/*
 	 * Put a hold on the pool, drop the namespace lock, stop async tasks,
 	 * reacquire the namespace lock, and see if we can export.
 	 */
 	spa_open_ref(spa, FTAG);
+
+	/*
+	 * Mark the pool as facing impending exit if this is a forced
+	 * destroy or export.
+	 */
+	force_removal = hardforce && modifying;
+	if (force_removal) {
+		/* Ensure that references see this change after this. */
+		spa_set_killer(spa, curthread);
+	}
 	mutex_exit(&spa_namespace_lock);
 	spa_async_suspend(spa);
+
+	/*
+	 * Cancel all sends/receives if necessary, and wait for their holds
+	 * to expire.  This is done without the namespace lock, since some
+	 * operations may require acquiring it (although they will fail).
+	 */
+	if (force_removal && spa->spa_sync_on) {
+		error = dsl_dataset_sendrecv_cancel_all(spa);
+		if (error != 0) {
+			spa_set_killer(spa, NULL);
+			spa_async_resume(spa);
+			return (error);
+		}
+		txg_force_export(spa);
+		spa_evicting_os_wait(spa);
+	}
+
 	if (spa->spa_zvol_taskq) {
 		zvol_remove_minors(spa, spa_name(spa), B_TRUE);
 		taskq_wait(spa->spa_zvol_taskq);
@@ -6272,16 +6397,38 @@ spa_export_common(const char *pool, int new_state, nvlist_t **oldconfig,
 	mutex_enter(&spa_namespace_lock);
 	spa_close(spa, FTAG);
 
-	if (spa->spa_state == POOL_STATE_UNINITIALIZED)
+	if (!modifying)
 		goto export_spa;
+
 	/*
 	 * The pool will be in core if it's openable, in which case we can
 	 * modify its state.  Objsets may be open only because they're dirty,
 	 * so we have to force it to sync before checking spa_refcnt.
 	 */
-	if (spa->spa_sync_on) {
-		txg_wait_synced(spa->spa_dsl_pool, 0);
+	if (!force_removal && spa->spa_sync_on) {
+		error = txg_wait_synced_tx(spa->spa_dsl_pool, 0,
+		    NULL, TXG_WAIT_F_NOSUSPEND);
+		if (error != 0)
+			goto fail;
 		spa_evicting_os_wait(spa);
+	}
+
+	/*
+	 * For forced removal, wait for refcount to drop to minref.  At this
+	 * point, all ioctls should be on their way out or getting rejected
+	 * at the front door.
+	 */
+	if (force_removal) {
+		mutex_exit(&spa_namespace_lock);
+		mutex_enter(&spa->spa_evicting_os_lock);
+		while (zfs_refcount_count(&spa->spa_refcount) >
+		    spa->spa_minref) {
+			zio_cancel(spa);
+			cv_wait(&spa->spa_evicting_os_cv,
+			    &spa->spa_evicting_os_lock);
+		}
+		mutex_exit(&spa->spa_evicting_os_lock);
+		mutex_enter(&spa_namespace_lock);
 	}
 
 	/*
@@ -6290,6 +6437,7 @@ spa_export_common(const char *pool, int new_state, nvlist_t **oldconfig,
 	 * fault injection handlers.
 	 */
 	if (!spa_refcount_zero(spa) || (spa->spa_inject_ref != 0)) {
+		VERIFY(!force_removal);
 		error = SET_ERROR(EBUSY);
 		goto fail;
 	}
@@ -6320,6 +6468,7 @@ spa_export_common(const char *pool, int new_state, nvlist_t **oldconfig,
 			vdev_trim_stop_all(rvd, VDEV_TRIM_ACTIVE);
 			vdev_autotrim_stop_all(spa);
 			vdev_rebuild_stop_all(spa);
+			l2arc_spa_rebuild_stop(spa);
 		}
 
 		/*
@@ -6344,7 +6493,14 @@ export_spa:
 		spa_event_notify(spa, NULL, NULL, ESC_ZFS_POOL_EXPORT);
 
 	if (spa->spa_state != POOL_STATE_UNINITIALIZED) {
-		spa_unload(spa);
+		/*
+		 * If the pool is not being hard forced, throw an error upon
+		 * suspension and abort.
+		 */
+		txg_how = (!hardforce) ? TXG_WAIT_F_NOSUSPEND : 0;
+		error = spa_unload(spa, txg_how);
+		if (error != 0)
+			goto fail;
 		spa_deactivate(spa);
 	}
 
@@ -6352,7 +6508,7 @@ export_spa:
 		VERIFY(nvlist_dup(spa->spa_config, oldconfig, 0) == 0);
 
 	if (new_state != POOL_STATE_UNINITIALIZED) {
-		if (!hardforce)
+		if (!force_removal)
 			spa_write_cachefile(spa, B_TRUE, B_TRUE);
 		spa_remove(spa);
 	} else {
@@ -6368,6 +6524,8 @@ export_spa:
 	return (0);
 
 fail:
+	if (force_removal)
+		spa_set_killer(spa, NULL);
 	spa->spa_is_exporting = B_FALSE;
 	spa_async_resume(spa);
 	mutex_exit(&spa_namespace_lock);
@@ -6570,10 +6728,8 @@ spa_vdev_add(spa_t *spa, nvlist_t *nvroot)
 	 */
 	(void) spa_vdev_exit(spa, vd, txg, 0);
 
-	mutex_enter(&spa_namespace_lock);
-	spa_config_update(spa, SPA_CONFIG_UPDATE_POOL);
+	spa_config_update_pool(spa);
 	spa_event_notify(spa, NULL, NULL, ESC_ZFS_VDEV_ADD);
-	mutex_exit(&spa_namespace_lock);
 
 	return (0);
 }
@@ -6619,6 +6775,9 @@ spa_vdev_attach(spa_t *spa, uint64_t guid, nvlist_t *nvroot, int replacing,
 		    ZFS_ERR_CHECKPOINT_EXISTS : ZFS_ERR_DISCARDING_CHECKPOINT;
 		return (spa_vdev_exit(spa, NULL, txg, error));
 	}
+
+	/* If the pool is being force-exported, no vdev changes may occur. */
+	ASSERT(!spa_exiting_any(spa));
 
 	if (rebuild) {
 		if (!spa_feature_is_enabled(spa, SPA_FEATURE_DEVICE_REBUILD))
@@ -6786,8 +6945,8 @@ spa_vdev_attach(spa_t *spa, uint64_t guid, nvlist_t *nvroot, int replacing,
 	vdev_propagate_state(pvd);
 
 	tvd = newvd->vdev_top;
-	ASSERT(pvd->vdev_top == tvd);
-	ASSERT(tvd->vdev_parent == rvd);
+	ASSERT3P(pvd->vdev_top, ==, tvd);
+	ASSERT3P(tvd->vdev_parent, ==, rvd);
 
 	vdev_config_dirty(tvd);
 
@@ -6831,8 +6990,8 @@ spa_vdev_attach(spa_t *spa, uint64_t guid, nvlist_t *nvroot, int replacing,
 		    spa_feature_is_enabled(spa, SPA_FEATURE_RESILVER_DEFER)) {
 			vdev_defer_resilver(newvd);
 		} else {
-			dsl_scan_restart_resilver(spa->spa_dsl_pool,
-			    dtl_max_txg);
+			VERIFY0(dsl_scan_restart_resilver(spa->spa_dsl_pool,
+			    dtl_max_txg));
 		}
 	}
 
@@ -7692,7 +7851,7 @@ spa_vdev_split_mirror(spa_t *spa, char *newname, nvlist_t *config,
 	return (error);
 
 out:
-	spa_unload(newspa);
+	VERIFY0(spa_unload(newspa, 0));
 	spa_deactivate(newspa);
 	spa_remove(newspa);
 
@@ -8030,17 +8189,17 @@ spa_async_thread(void *arg)
 	if (tasks & SPA_ASYNC_CONFIG_UPDATE) {
 		uint64_t old_space, new_space;
 
-		mutex_enter(&spa_namespace_lock);
 		old_space = metaslab_class_get_space(spa_normal_class(spa));
 		old_space += metaslab_class_get_space(spa_special_class(spa));
 		old_space += metaslab_class_get_space(spa_dedup_class(spa));
+		new_space = old_space;
 
-		spa_config_update(spa, SPA_CONFIG_UPDATE_POOL);
-
-		new_space = metaslab_class_get_space(spa_normal_class(spa));
-		new_space += metaslab_class_get_space(spa_special_class(spa));
-		new_space += metaslab_class_get_space(spa_dedup_class(spa));
-		mutex_exit(&spa_namespace_lock);
+		if (spa_config_update_pool(spa) == 0) {
+			new_space =
+			    metaslab_class_get_space(spa_normal_class(spa)) +
+			    metaslab_class_get_space(spa_special_class(spa)) +
+			    metaslab_class_get_space(spa_dedup_class(spa));
+		}
 
 		/*
 		 * If the pool grew as a result of the config update,
@@ -8097,7 +8256,7 @@ spa_async_thread(void *arg)
 	    !vdev_rebuild_active(spa->spa_root_vdev) &&
 	    (!dsl_scan_resilvering(dp) ||
 	    !spa_feature_is_enabled(dp->dp_spa, SPA_FEATURE_RESILVER_DEFER)))
-		dsl_scan_restart_resilver(dp, 0);
+		(void) dsl_scan_restart_resilver(dp, 0);
 
 	if (tasks & SPA_ASYNC_INITIALIZE_RESTART) {
 		mutex_enter(&spa_namespace_lock);
@@ -8349,6 +8508,9 @@ spa_sync_nvlist(spa_t *spa, uint64_t obj, nvlist_t *nv, dmu_tx_t *tx)
 	size_t bufsize;
 	size_t nvsize = 0;
 	dmu_buf_t *db;
+
+	if (spa_exiting_any(spa))
+		return;
 
 	VERIFY(nvlist_size(nv, &nvsize, NV_ENCODE_XDR) == 0);
 
@@ -8805,6 +8967,9 @@ vdev_indirect_state_sync_verify(vdev_t *vd)
 	vdev_indirect_mapping_t *vim __maybe_unused = vd->vdev_indirect_mapping;
 	vdev_indirect_births_t *vib __maybe_unused = vd->vdev_indirect_births;
 
+	if (spa_exiting_any(vd->vdev_spa))
+		return;
+
 	if (vd->vdev_ops == &vdev_indirect_ops) {
 		ASSERT(vim != NULL);
 		ASSERT(vib != NULL);
@@ -9008,10 +9173,10 @@ spa_sync_rewrite_vdev_config(spa_t *spa, dmu_tx_t *tx)
 {
 	vdev_t *rvd = spa->spa_root_vdev;
 	uint64_t txg = tx->tx_txg;
+	boolean_t exiting = B_FALSE;
 
-	for (;;) {
+	while (exiting == B_FALSE) {
 		int error = 0;
-
 		/*
 		 * We hold SCL_STATE to prevent vdev open/close/etc.
 		 * while we're attempting to write the vdev labels.
@@ -9055,7 +9220,18 @@ spa_sync_rewrite_vdev_config(spa_t *spa, dmu_tx_t *tx)
 		if (error == 0)
 			break;
 		zio_suspend(spa, NULL, ZIO_SUSPEND_IOERR);
-		zio_resume_wait(spa);
+
+		mutex_enter(&spa->spa_suspend_lock);
+		for (;;) {
+			exiting = spa_exiting(spa);
+			if (exiting || spa_suspended(spa) == B_FALSE)
+				break;
+			cv_wait(&spa->spa_suspend_cv, &spa->spa_suspend_lock);
+		}
+		mutex_exit(&spa->spa_suspend_lock);
+
+		if (exiting)
+			zio_cancel(spa);
 	}
 }
 
@@ -9303,7 +9479,7 @@ spa_evict_all(void)
 		spa_close(spa, FTAG);
 
 		if (spa->spa_state != POOL_STATE_UNINITIALIZED) {
-			spa_unload(spa);
+			VERIFY0(spa_unload(spa, 0));
 			spa_deactivate(spa);
 		}
 		spa_remove(spa);

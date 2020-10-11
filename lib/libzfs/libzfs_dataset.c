@@ -486,18 +486,28 @@ make_dataset_handle(libzfs_handle_t *hdl, const char *path)
 
 	zhp->zfs_hdl = hdl;
 	(void) strlcpy(zhp->zfs_name, path, sizeof (zhp->zfs_name));
-	if (zcmd_alloc_dst_nvlist(hdl, &zc, 0) != 0) {
-		free(zhp);
-		return (NULL);
-	}
-	if (get_stats_ioctl(zhp, &zc) == -1) {
-		zcmd_free_nvlists(&zc);
-		free(zhp);
-		return (NULL);
-	}
-	if (make_dataset_handle_common(zhp, &zc) == -1) {
-		free(zhp);
-		zhp = NULL;
+
+	if (!hdl->libzfs_force_export) {
+		if (zcmd_alloc_dst_nvlist(hdl, &zc, 0) != 0) {
+			free(zhp);
+			return (NULL);
+		}
+		if (get_stats_ioctl(zhp, &zc) == -1) {
+			zcmd_free_nvlists(&zc);
+			free(zhp);
+			return (NULL);
+		}
+		if (make_dataset_handle_common(zhp, &zc) == -1) {
+			free(zhp);
+			zhp = NULL;
+		}
+	} else {
+		/*
+		 * Called from zpool_disable_datasets(), which uses mount
+		 * entries, so de facto the dataset is a ZFS.
+		 */
+		zhp->zfs_dmustats.dds_type = DMU_OST_ZFS;
+		zhp->zfs_type = ZFS_TYPE_FILESYSTEM;
 	}
 	zcmd_free_nvlists(&zc);
 	return (zhp);

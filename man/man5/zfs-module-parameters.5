@@ -1640,6 +1640,26 @@ Default value: \fB0\fR.
 .sp
 .ne 2
 .na
+\fBzfs_forced_export_unmount\fR (int)
+.ad
+.RS 12n
+During forced unmount, leave the filesystem in a disabled mode of operation,
+in which all new I/Os fail, except for those required to unmount it.
+Intended for users trying to forcibly export a pool even when I/Os are in
+progress, without the need to find and stop them.  This option does not
+affect processes that are merely sitting on the filesystem, only those
+performing active I/O.
+.sp
+This parameter can be set to 1 to enable this behavior.
+.sp
+This parameter only applies on Linux.
+.sp
+Default value: \fB0\fR.
+.RE
+
+.sp
+.ne 2
+.na
 \fBzfs_key_max_salt_uses\fR (ulong)
 .ad
 .RS 12n
