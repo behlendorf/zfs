@@ -871,7 +871,9 @@ extern void spa_remove(spa_t *spa);
 extern spa_t *spa_next(spa_t *prev);
 
 /* Refcount functions */
-extern void spa_open_ref(spa_t *spa, void *tag);
+extern void _spa_open_ref(spa_t *spa, void *tag, const char *file, size_t line);
+#define spa_open_ref(spa, tag)	\
+	_spa_open_ref(spa, tag, __FILE__, __LINE__)
 extern void spa_close(spa_t *spa, void *tag);
 extern void spa_async_close(spa_t *spa, void *tag);
 extern boolean_t spa_refcount_zero(spa_t *spa);
@@ -988,10 +990,18 @@ extern int spa_import_progress_set_state(uint64_t pool_guid,
     spa_load_state_t spa_load_state);
 
 /* Pool configuration locks */
-extern int spa_config_tryenter(spa_t *spa, int locks, void *tag, krw_t rw);
-extern int spa_config_enter_flags(spa_t *spa, int locks, const void *tag, krw_t rw,
-    spa_config_flag_t flags);
-extern void spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw);
+extern int _spa_config_tryenter(spa_t *spa, int locks, void *tag, krw_t rw,
+    const char *file, size_t line);
+#define spa_config_tryenter(spa, locks, tag, rw)			\
+	_spa_config_tryenter(spa, locks, tag, rw, __FILE__, __LINE__)
+extern int _spa_config_enter_flags(spa_t *spa, int locks, const void *tag, krw_t rw,
+    spa_config_flag_t flags, const char *file, size_t line);
+#define spa_config_enter_flags(spa, locks, tag, rw, flags)		\
+	_spa_config_enter_flags(spa, locks, tag, rw, flags, __FILE__, __LINE__)
+extern void _spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw,
+    const char *file, size_t line);
+#define spa_config_enter(spa, locks, tag, rw)				\
+	_spa_config_enter(spa, locks, tag, rw, __FILE__, __LINE__)
 extern void spa_config_exit(spa_t *spa, int locks, const void *tag);
 extern int spa_config_held(spa_t *spa, int locks, krw_t rw);
 
@@ -1004,7 +1014,10 @@ extern void spa_vdev_config_exit(spa_t *spa, vdev_t *vd, uint64_t txg,
 extern int spa_vdev_exit(spa_t *spa, vdev_t *vd, uint64_t txg, int error);
 
 /* Pool vdev state change lock */
-extern void spa_vdev_state_enter(spa_t *spa, int oplock);
+extern void _spa_vdev_state_enter(spa_t *spa, int oplock,
+    const char *file, size_t line);
+#define spa_vdev_state_enter(spa, oplock)			\
+	_spa_vdev_state_enter(spa, oplock, __FILE__, __LINE__)
 extern int spa_vdev_state_exit(spa_t *spa, vdev_t *vd, int error);
 
 /* Log state */
