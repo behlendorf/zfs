@@ -6090,7 +6090,17 @@ spa_import(char *pool, nvlist_t *config, nvlist_t *props, uint64_t flags)
 		/*
 		 * Update the config cache to include the newly-imported pool.
 		 */
-		spa_config_update(spa, SPA_CONFIG_UPDATE_POOL);
+		mutex_exit(&spa_namespace_lock);
+		error = spa_config_update_pool(spa);
+		if (error != 0) {
+			mutex_enter(&spa_namespace_lock);
+			spa_unload(spa);
+			spa_deactivate(spa);
+			spa_remove(spa);
+			mutex_exit(&spa_namespace_lock);
+			return (error);
+		}
+		mutex_enter(&spa_namespace_lock);
 	}
 
 	/*
@@ -6569,10 +6579,8 @@ spa_vdev_add(spa_t *spa, nvlist_t *nvroot)
 	 */
 	(void) spa_vdev_exit(spa, vd, txg, 0);
 
-	mutex_enter(&spa_namespace_lock);
-	spa_config_update(spa, SPA_CONFIG_UPDATE_POOL);
+	spa_config_update_pool(spa);
 	spa_event_notify(spa, NULL, NULL, ESC_ZFS_VDEV_ADD);
-	mutex_exit(&spa_namespace_lock);
 
 	return (0);
 }
@@ -8029,17 +8037,17 @@ spa_async_thread(void *arg)
 	if (tasks & SPA_ASYNC_CONFIG_UPDATE) {
 		uint64_t old_space, new_space;
 
-		mutex_enter(&spa_namespace_lock);
 		old_space = metaslab_class_get_space(spa_normal_class(spa));
 		old_space += metaslab_class_get_space(spa_special_class(spa));
 		old_space += metaslab_class_get_space(spa_dedup_class(spa));
+		new_space = old_space;
 
-		spa_config_update(spa, SPA_CONFIG_UPDATE_POOL);
-
-		new_space = metaslab_class_get_space(spa_normal_class(spa));
-		new_space += metaslab_class_get_space(spa_special_class(spa));
-		new_space += metaslab_class_get_space(spa_dedup_class(spa));
-		mutex_exit(&spa_namespace_lock);
+		if (spa_config_update_pool(spa) == 0) {
+			new_space =
+			    metaslab_class_get_space(spa_normal_class(spa)) +
+			    metaslab_class_get_space(spa_special_class(spa)) +
+			    metaslab_class_get_space(spa_dedup_class(spa));
+		}
 
 		/*
 		 * If the pool grew as a result of the config update,

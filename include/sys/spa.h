@@ -849,16 +849,13 @@ extern kmutex_t spa_namespace_lock;
  * SPA configuration functions in spa_config.c
  */
 
-#define	SPA_CONFIG_UPDATE_POOL	0
-#define	SPA_CONFIG_UPDATE_VDEVS	1
-
 extern void spa_write_cachefile(spa_t *, boolean_t, boolean_t);
 extern void spa_config_load(void);
 extern nvlist_t *spa_all_configs(uint64_t *);
 extern void spa_config_set(spa_t *spa, nvlist_t *config);
 extern nvlist_t *spa_config_generate(spa_t *spa, vdev_t *vd, uint64_t txg,
     int getstats);
-extern void spa_config_update(spa_t *spa, int what);
+extern int spa_config_update_pool(spa_t *spa);
 extern int spa_config_parse(spa_t *spa, vdev_t **vdp, nvlist_t *nv,
     vdev_t *parent, uint_t id, int atype);
 
