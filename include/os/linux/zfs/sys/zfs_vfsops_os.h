@@ -101,7 +101,7 @@ struct zfsvfs {
 	boolean_t	z_utf8;		/* utf8-only */
 	int		z_norm;		/* normalization flags */
 	boolean_t	z_relatime;	/* enable relatime mount option */
-	boolean_t	z_unmounted;	/* unmounted */
+	uint8_t		z_unmounted;	/* mount status */
 	rrmlock_t	z_teardown_lock;
 	krwlock_t	z_teardown_inactive_lock;
 	list_t		z_all_znodes;	/* all znodes in the fs */
@@ -137,6 +137,11 @@ struct zfsvfs {
 	kmutex_t	*z_hold_locks;	/* znode hold locks */
 	taskqid_t	z_drain_task;	/* task id for the unlink drain task */
 };
+
+/* z_unmounted values */
+#define	Z_MOUNTED	(0)		/* filesystem is mounted */
+#define	Z_UNMOUNT_BEGIN (1)		/* filesystem has been force unmounted */
+#define	Z_UNMOUNTED	(2)		/* filesystem is unmounted */
 
 #define	ZSB_XATTR	0x0001		/* Enable user xattrs */
 

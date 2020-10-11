@@ -526,7 +526,7 @@ zfs_unlinked_drain_task(void *arg)
 		 * when an unmount is requested.
 		 */
 		zrele(zp);
-		ASSERT3B(zfsvfs->z_unmounted, ==, B_FALSE);
+		ASSERT3U(zfsvfs->z_unmounted, ==, Z_MOUNTED);
 	}
 	zap_cursor_fini(&zc);
 
@@ -541,7 +541,7 @@ zfs_unlinked_drain_task(void *arg)
 void
 zfs_unlinked_drain(zfsvfs_t *zfsvfs)
 {
-	ASSERT3B(zfsvfs->z_unmounted, ==, B_FALSE);
+	ASSERT3U(zfsvfs->z_unmounted, ==, Z_MOUNTED);
 	ASSERT3B(zfsvfs->z_draining, ==, B_FALSE);
 
 	zfsvfs->z_draining = B_TRUE;
@@ -563,7 +563,6 @@ zfs_unlinked_drain(zfsvfs_t *zfsvfs)
 void
 zfs_unlinked_drain_stop_wait(zfsvfs_t *zfsvfs)
 {
-	ASSERT3B(zfsvfs->z_unmounted, ==, B_FALSE);
 
 	if (zfsvfs->z_draining) {
 		zfsvfs->z_drain_cancel = B_TRUE;

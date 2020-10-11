@@ -158,3 +158,14 @@ spl_kthread_create(int (*func)(void *), void *data, const char namefmt[], ...)
 	} while (1);
 }
 EXPORT_SYMBOL(spl_kthread_create);
+
+/*
+ * spl_kthread_signal - Wrapper for sending signals to a thread.
+ */
+int
+spl_kthread_signal(kthread_t *tsk, int sig)
+{
+
+	return send_sig(sig, tsk, 0);
+}
+EXPORT_SYMBOL(spl_kthread_signal);

@@ -66,11 +66,12 @@ typedef struct txg_list {
 } txg_list_t;
 
 struct dsl_pool;
+struct dmu_tx;
 
 extern void txg_init(struct dsl_pool *dp, uint64_t txg);
 extern void txg_fini(struct dsl_pool *dp);
 extern void txg_sync_start(struct dsl_pool *dp);
-extern void txg_sync_stop(struct dsl_pool *dp);
+extern int txg_sync_stop(struct dsl_pool *dp, uint64_t txg_how);
 extern uint64_t txg_hold_open(struct dsl_pool *dp, txg_handle_t *txghp);
 extern void txg_rele_to_quiesce(txg_handle_t *txghp);
 extern void txg_rele_to_sync(txg_handle_t *txghp);
@@ -92,6 +93,8 @@ extern void txg_kick(struct dsl_pool *dp);
 typedef enum {
 	/* Reject the call with EINTR upon receiving a signal. */
 	TXG_WAIT_F_SIGNAL	= (1U << 0),
+	/* Reject the call with EAGAIN upon suspension. */
+	TXG_WAIT_F_NOSUSPEND	= (1U << 1),
 } txg_wait_flag_t;
 extern int txg_wait_synced(struct dsl_pool *dp, uint64_t txg);
 extern int txg_wait_synced_tx(struct dsl_pool *dp, uint64_t txg,
@@ -113,6 +116,8 @@ extern int txg_wait_synced_tx(struct dsl_pool *dp, uint64_t txg,
 extern void txg_wait_open(struct dsl_pool *dp, uint64_t txg,
     boolean_t should_quiesce);
 
+void txg_force_export(spa_t *spa);
+
 /*
  * Returns TRUE if we are "backed up" waiting for the syncing
  * transaction to complete; otherwise returns FALSE.
@@ -123,6 +128,8 @@ extern boolean_t txg_stalled(struct dsl_pool *dp);
 extern boolean_t txg_sync_waiting(struct dsl_pool *dp);
 
 extern void txg_verify(spa_t *spa, uint64_t txg);
+
+extern void txg_completion_notify(struct dsl_pool *dp);
 
 /*
  * Wait for pending commit callbacks of already-synced transactions to finish

@@ -541,8 +541,8 @@ static int
 spa_config_update_begin(spa_t *spa, void *tag)
 {
 
-	spa_config_enter(spa, SCL_ALL, tag, RW_WRITER);
-	return (0);
+	return (spa_config_enter_flags(spa, SCL_ALL, tag, RW_WRITER,
+	    SCL_FLAG_NOSUSPEND));
 }
 
 /* Complete a label update. */
@@ -557,16 +557,17 @@ spa_config_update_complete(spa_t *spa, uint64_t txg, boolean_t postsysevent,
 	/*
 	 * Wait for the mosconfig to be regenerated and synced.
 	 */
-	txg_wait_synced(spa->spa_dsl_pool, txg);
-
-	/*
-	 * Update the global config cache to reflect the new mosconfig.
-	 * This operation does not perform any pool I/O, so it is
-	 * safe even if one or more of them are suspended.
-	 */
-	mutex_enter(&spa_namespace_lock);
-	spa_write_cachefile(spa, B_FALSE, postsysevent);
-	mutex_exit(&spa_namespace_lock);
+	error = txg_wait_synced(spa->spa_dsl_pool, txg);
+	if (error == 0) {
+		/*
+		 * Update the global config cache to reflect the new mosconfig.
+		 * This operation does not perform any pool I/O, so it is
+		 * safe even if one or more of them are suspended.
+		 */
+		mutex_enter(&spa_namespace_lock);
+		spa_write_cachefile(spa, B_FALSE, postsysevent);
+		mutex_exit(&spa_namespace_lock);
+	}
 
 	return (error);
 }

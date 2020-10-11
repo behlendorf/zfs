@@ -563,13 +563,18 @@ spa_condense_indirect_commit_entry(spa_t *spa,
     vdev_indirect_mapping_entry_phys_t *vimep, uint32_t count)
 {
 	spa_condensing_indirect_t *sci = spa->spa_condensing_indirect;
+	dmu_tx_t *tx;
+	int txgoff;
 
 	ASSERT3U(count, <, DVA_GET_ASIZE(&vimep->vimep_dst));
 
-	dmu_tx_t *tx = dmu_tx_create_dd(spa_get_dsl(spa)->dp_mos_dir);
+	tx = dmu_tx_create_dd(spa_get_dsl(spa)->dp_mos_dir);
 	dmu_tx_hold_space(tx, sizeof (*vimep) + sizeof (count));
-	VERIFY0(dmu_tx_assign(tx, TXG_WAIT));
-	int txgoff = dmu_tx_get_txg(tx) & TXG_MASK;
+	if (dmu_tx_assign(tx, TXG_WAIT) != 0) {
+		dmu_tx_abort(tx);
+		return;
+	}
+	txgoff = dmu_tx_get_txg(tx) & TXG_MASK;
 
 	/*
 	 * If we are the first entry committed this txg, kick off the sync

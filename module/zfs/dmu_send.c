@@ -2198,6 +2198,7 @@ setup_send_progress(struct dmu_send_params *dspp)
 	dssp->dss_outfd = dspp->outfd;
 	dssp->dss_off = dspp->off;
 	dssp->dss_proc = curproc;
+	dssp->dss_thread = curthread;
 	mutex_enter(&dspp->to_ds->ds_sendstream_lock);
 	list_insert_head(&dspp->to_ds->ds_sendstreams, dssp);
 	mutex_exit(&dspp->to_ds->ds_sendstream_lock);
@@ -3076,6 +3077,30 @@ out:
 	if (ds != origds)
 		dsl_dataset_rele(ds, FTAG);
 	return (err);
+}
+
+/* Close all send streams on the dataset.  */
+int
+dmu_send_close(dsl_dataset_t *ds)
+{
+	int err = 0;
+	dmu_sendstatus_t *dss;
+
+	mutex_enter(&ds->ds_sendstream_lock);
+	dss = list_head(&ds->ds_sendstreams);
+	while (err == 0 && dss != NULL) {
+		/*
+		 * Interrupt the initiator thread, which will cause it
+		 * to initiate a cleanup error exit.  Also send SIGPIPE
+		 * because this interrupts pipe writes.
+		 */
+		thread_signal(dss->dss_thread, SIGINT);
+		thread_signal(dss->dss_thread, SIGPIPE);
+		dss = list_next(&ds->ds_sendstreams, dss);
+	}
+	mutex_exit(&ds->ds_sendstream_lock);
+
+	return (0);
 }
 
 /* BEGIN CSTYLED */

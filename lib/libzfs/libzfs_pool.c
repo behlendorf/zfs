@@ -256,7 +256,9 @@ zpool_get_state_str(zpool_handle_t *zhp)
 
 	status = zpool_get_status(zhp, NULL, &errata);
 
-	if (zpool_get_state(zhp) == POOL_STATE_UNAVAIL) {
+	if (status == ZPOOL_STATUS_FORCE_EXPORTING) {
+		str = gettext("FORCE-EXPORTING");
+	} else if (zpool_get_state(zhp) == POOL_STATE_UNAVAIL) {
 		str = gettext("FAULTED");
 	} else if (status == ZPOOL_STATUS_IO_FAILURE_WAIT ||
 	    status == ZPOOL_STATUS_IO_FAILURE_MMP) {
@@ -1425,7 +1427,8 @@ zpool_destroy(zpool_handle_t *zhp, const char *log_str)
 	}
 
 	if (zfp) {
-		remove_mountpoint(zfp);
+		if (!hdl->libzfs_force_export)
+			remove_mountpoint(zfp);
 		zfs_close(zfp);
 	}
 

@@ -231,6 +231,7 @@ typedef pthread_t	kthread_t;
 	zk_thread_create(func, arg, stksize, state)
 #define	thread_create(stk, stksize, func, arg, len, pp, state, pri)	\
 	zk_thread_create(func, arg, stksize, state)
+#define	thread_signal(t, s) pthread_kill((pthread_t)t, s)
 #define	thread_exit()	pthread_exit(NULL)
 #define	thread_join(t)	pthread_join((pthread_t)(t), NULL)
 
@@ -430,8 +431,8 @@ void procfs_list_add(procfs_list_t *procfs_list, void *p);
 #define	kmem_debugging()	0
 #define	kmem_cache_reap_now(_c)	umem_cache_reap_now(_c);
 #define	kmem_cache_set_move(_c, _cb)	/* nothing */
-#define	POINTER_INVALIDATE(_pp)		/* nothing */
-#define	POINTER_IS_VALID(_p)	0
+#define	POINTER_INVALIDATE(_pp)	(*(_pp) = (void *)((uintptr_t)(*(_pp)) | 0x1))
+#define	POINTER_IS_VALID(_p)	(!((uintptr_t)(p) & 0x1))
 
 typedef umem_cache_t kmem_cache_t;
 

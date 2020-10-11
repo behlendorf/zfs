@@ -72,6 +72,7 @@ struct libzfs_handle {
 	boolean_t libzfs_prop_debug;
 	regex_t libzfs_urire;
 	uint64_t libzfs_max_nvlist;
+	boolean_t libzfs_force_export;
 };
 
 struct zfs_handle {

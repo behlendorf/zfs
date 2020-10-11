@@ -1776,7 +1776,7 @@ zpool_export_one(zpool_handle_t *zhp, void *data)
 {
 	export_cbdata_t *cb = data;
 
-	if (zpool_disable_datasets(zhp, cb->force) != 0)
+	if (zpool_disable_datasets(zhp, cb->force || cb->hardforce) != 0)
 		return (1);
 
 	/* The history must be logged as part of the export */
