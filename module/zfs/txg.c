@@ -323,6 +323,7 @@ txg_hold_open(dsl_pool_t *dp, txg_handle_t *th)
 	th->th_cpu = tc;
 	th->th_txg = txg;
 
+	ASSERT3U(txg, <=, spa_final_dirty_txg(dp->dp_spa));
 	return (txg);
 }
 
