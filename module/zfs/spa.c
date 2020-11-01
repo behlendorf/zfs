@@ -1602,7 +1602,9 @@ spa_unload(spa_t *spa, uint64_t txg_how)
 		while ((vd = list_head(&spa->spa_state_dirty_list)) != NULL)
 			vdev_state_clean(vd);
 		/* The only dirty entries should be for spa_syncing_txg + 1. */
-		for (t = 0, txg = spa_syncing_txg(spa) + 1; t < TXG_SIZE;) {
+		t = 0;
+		txg = spa_syncing_txg(spa) + 1;
+		while (t < TXG_SIZE) {
 			vd = txg_list_remove(&spa->spa_vdev_txg_list, t);
 			if (vd == NULL) {
 				t++;
@@ -6348,9 +6350,8 @@ spa_export_common(const char *pool, int new_state, nvlist_t **oldconfig,
 		return (SET_ERROR(EBUSY));
 	}
 
-	modifying = spa->spa_sync_on &&
-	    (new_state == POOL_STATE_DESTROYED ||
-	     new_state == POOL_STATE_EXPORTED);
+	modifying = spa->spa_sync_on && (new_state == POOL_STATE_DESTROYED ||
+	    new_state == POOL_STATE_EXPORTED);
 
 	/*
 	 * Put a hold on the pool, drop the namespace lock, stop async tasks,

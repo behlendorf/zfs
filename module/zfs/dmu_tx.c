@@ -1140,7 +1140,7 @@ void
 dmu_tx_wait(dmu_tx_t *tx)
 {
 
-	return dmu_tx_wait_flags(tx, 0);
+	return (dmu_tx_wait_flags(tx, 0));
 }
 
 static void

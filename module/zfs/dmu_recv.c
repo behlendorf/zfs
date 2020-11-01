@@ -358,7 +358,6 @@ recv_own(dsl_pool_t *dp, dmu_tx_t *tx, uint64_t dsobj, ds_hold_flags_t dsflags,
 	ds->ds_receiver = drc;
 	*dsp = ds;
 	VERIFY0(dmu_objset_from_ds(ds, osp));
-	return;
 }
 
 static void

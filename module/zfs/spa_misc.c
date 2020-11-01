@@ -526,7 +526,9 @@ void
 _spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw,
     const char *file, size_t line)
 {
-	_spa_config_enter_flags(spa, locks, tag, rw, /*flags*/0, file, line);
+	spa_config_flag_t flags = 0;
+
+	_spa_config_enter_flags(spa, locks, tag, rw, flags, file, line);
 }
 
 int

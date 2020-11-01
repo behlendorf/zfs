@@ -99,7 +99,8 @@ extern struct rw_semaphore spl_kmem_cache_sem;
 #endif
 
 #define	POINTER_IS_VALID(p)		0	/* Unimplemented */
-#define	POINTER_INVALIDATE(pp)		(*(pp) = (void *)((uintptr_t)(*(pp)) | 0x1))
+#define	POINTER_INVALIDATE(pp)		\
+	(*(pp) = (void *)((uintptr_t)(*(pp)) | 0x1))
 
 typedef int (*spl_kmem_ctor_t)(void *, void *, int);
 typedef void (*spl_kmem_dtor_t)(void *, void *);

@@ -140,7 +140,7 @@ struct zfsvfs {
 
 /* z_unmounted values */
 #define	Z_MOUNTED	(0)		/* filesystem is mounted */
-#define	Z_UNMOUNT_BEGIN (1)		/* filesystem has been force unmounted */
+#define	Z_UNMOUNT_BEGIN (1)		/* filesystem was force unmounted */
 #define	Z_UNMOUNTED	(2)		/* filesystem is unmounted */
 
 #define	ZSB_XATTR	0x0001		/* Enable user xattrs */

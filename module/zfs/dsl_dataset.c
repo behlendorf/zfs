@@ -929,7 +929,8 @@ dsl_dataset_long_held(dsl_dataset_t *ds)
  * so this implementation is a bit more complex...
  */
 static int
-dsl_dataset_active_foreach(spa_t *spa, int func(dsl_dataset_t *, void *), void *cl)
+dsl_dataset_active_foreach(spa_t *spa, int func(dsl_dataset_t *, void *),
+    void *cl)
 {
 	dsl_pool_t *dp = spa_get_dsl(spa);
 	objset_t *mos = dp->dp_meta_objset;
@@ -992,7 +993,7 @@ skip:
 	return (ret);
 }
 
-/**
+/*
  * Cancellation interfaces for send/receive streams.
  *
  * If a send/recv wins the race with a forced destroy, their pipes will be

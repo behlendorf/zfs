@@ -745,7 +745,8 @@ txg_wait_synced_tx(dsl_pool_t *dp, uint64_t txg, dmu_tx_t *tx,
 				goto done;
 			}
 		} else {
-			cv_wait_io(&dp_tx->tx_sync_done_cv, &dp_tx->tx_sync_lock);
+			cv_wait_io(&dp_tx->tx_sync_done_cv,
+			    &dp_tx->tx_sync_lock);
 		}
 	}
 
@@ -757,7 +758,7 @@ done:
 int
 txg_wait_synced(dsl_pool_t *dp, uint64_t txg)
 {
-	return txg_wait_synced_tx(dp, txg, NULL, 0);
+	return (txg_wait_synced_tx(dp, txg, NULL, 0));
 }
 
 /*
@@ -842,7 +843,6 @@ txg_force_export(spa_t *spa)
 	dsl_pool_t *dp = spa_get_dsl(spa);
 	tx_state_t *tx = &dp->dp_tx;
 	uint64_t t, txg;
-	boolean_t complete;
 
 	/*
 	 * When forcing removal, push through TXG_SIZE TXGs to ensure that
@@ -854,7 +854,8 @@ txg_force_export(spa_t *spa)
 	for (t = 0; t < TXG_SIZE; t++) {
 		txg_wait_open(dp, txg + t, B_TRUE);
 
-		for (complete = B_FALSE; !complete;) {
+		boolean_t complete = B_FALSE;
+		while (!complete) {
 			zio_cancel(spa);
 			mutex_enter(&tx->tx_sync_lock);
 			cv_wait(&tx->tx_sync_done_cv, &tx->tx_sync_lock);

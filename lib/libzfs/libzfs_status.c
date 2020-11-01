@@ -233,7 +233,7 @@ check_status(nvlist_t *config, boolean_t isimport, zpool_errata_t *erratap)
 	unsigned long system_hostid = get_system_hostid();
 
 	if (config == NULL)
-		return ZPOOL_STATUS_FORCE_EXPORTING;
+		return (ZPOOL_STATUS_FORCE_EXPORTING);
 
 	verify(nvlist_lookup_uint64(config, ZPOOL_CONFIG_VERSION,
 	    &version) == 0);
