@@ -558,7 +558,7 @@ spa_config_update_complete(spa_t *spa, uint64_t txg, boolean_t postsysevent,
 	 * Wait for the mosconfig to be regenerated and synced.
 	 */
 	error = txg_wait_synced(spa->spa_dsl_pool, txg);
-	if (error == 0) {
+	if (error == 0 && !spa->spa_is_root) {
 		/*
 		 * Update the global config cache to reflect the new mosconfig.
 		 * This operation does not perform any pool I/O, so it is
