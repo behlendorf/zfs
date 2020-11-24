@@ -710,7 +710,21 @@ zio_notify_parent(zio_t *pio, zio_t *zio, enum zio_wait_type wait,
 	if (zio->io_error && !(zio->io_flags & ZIO_FLAG_DONT_PROPAGATE))
 		*errorp = zio_worst_error(*errorp, zio->io_error);
 	pio->io_reexecute |= zio->io_reexecute;
+	pio->io_prop.zp_direct_write_verify_error =
+	    zio->io_prop.zp_direct_write_verify_error;
 	ASSERT3U(*countp, >, 0);
+
+	/*
+	 * If a Direct I/O write checksum verify error has occurred then
+	 * this I/O should not attempt to be issued again in
+	 * zio_vdev_io_assess(). Instead the EINVAL error should just be
+	 * propagated up through parents and returned.
+	 */
+	if (pio->io_prop.zp_direct_write_verify_error) {
+		ASSERT3U(*errorp, ==, EINVAL);
+		ASSERT3U(pio->io_child_type, ==, ZIO_CHILD_LOGICAL);
+		pio->io_flags |= ZIO_FLAG_DONT_RETRY;
+	}
 
 	(*countp)--;
 
@@ -1121,20 +1135,14 @@ zio_write(zio_t *pio, spa_t *spa, uint64_t txg, blkptr_t *bp,
     const zbookmark_phys_t *zb)
 {
 	zio_t *zio;
+	enum zio_stage pipeline = zp->zp_direct_write == B_TRUE ?
+	    ZIO_DIRECT_WRITE_PIPELINE : (flags & ZIO_FLAG_DDT_CHILD) ?
+	    ZIO_DDT_CHILD_WRITE_PIPELINE : ZIO_WRITE_PIPELINE;
 
-	ASSERT(zp->zp_checksum >= ZIO_CHECKSUM_OFF &&
-	    zp->zp_checksum < ZIO_CHECKSUM_FUNCTIONS &&
-	    zp->zp_compress >= ZIO_COMPRESS_OFF &&
-	    zp->zp_compress < ZIO_COMPRESS_FUNCTIONS &&
-	    DMU_OT_IS_VALID(zp->zp_type) &&
-	    zp->zp_level < 32 &&
-	    zp->zp_copies > 0 &&
-	    zp->zp_copies <= spa_max_replication(spa));
 
 	zio = zio_create(pio, spa, txg, bp, data, lsize, psize, done, private,
 	    ZIO_TYPE_WRITE, priority, flags, NULL, 0, zb,
-	    ZIO_STAGE_OPEN, (flags & ZIO_FLAG_DDT_CHILD) ?
-	    ZIO_DDT_CHILD_WRITE_PIPELINE : ZIO_WRITE_PIPELINE);
+	    ZIO_STAGE_OPEN, pipeline);
 
 	zio->io_ready = ready;
 	zio->io_children_ready = children_ready;
@@ -1430,6 +1438,20 @@ zio_vdev_child_io(zio_t *pio, blkptr_t *bp, vdev_t *vd, uint64_t offset,
 		 */
 		pipeline |= ZIO_STAGE_CHECKSUM_VERIFY;
 		pio->io_pipeline &= ~ZIO_STAGE_CHECKSUM_VERIFY;
+	} else if (type == ZIO_TYPE_WRITE &&
+	    pio->io_prop.zp_direct_write == B_TRUE &&
+	    zfs_vdev_direct_write_verify_cnt > 0) {
+		/*
+		 * We only will verify checksums for Direct I/O writes for
+		 * Linux. FreeBSD is able to place user pages under write
+		 * protection before issuing them to the ZIO pipeline.
+		 *
+		 * Checksum validation errors will only be reported through
+		 * the top-level VDEV, which is set by this child ZIO.
+		 */
+		ASSERT3P(bp, !=, NULL);
+		ASSERT3U(pio->io_child_type, ==, ZIO_CHILD_LOGICAL);
+		pipeline |= ZIO_STAGE_DIO_CHECKSUM_VERIFY;
 	}
 
 	if (vd->vdev_ops->vdev_op_leaf) {
@@ -1470,6 +1492,11 @@ zio_vdev_child_io(zio_t *pio, blkptr_t *bp, vdev_t *vd, uint64_t offset,
 	    done, private, type, priority, flags, vd, offset, &pio->io_bookmark,
 	    ZIO_STAGE_VDEV_IO_START >> 1, pipeline);
 	ASSERT3U(zio->io_child_type, ==, ZIO_CHILD_VDEV);
+
+	if (zio->io_pipeline & ZIO_STAGE_DIO_CHECKSUM_VERIFY) {
+		ASSERT3U(zio->io_type, ==, ZIO_TYPE_WRITE);
+		zio->io_prop.zp_direct_write_verify_error = B_FALSE;
+	}
 
 	zio->io_physdone = pio->io_physdone;
 	if (vd->vdev_ops->vdev_op_leaf && zio->io_logical != NULL)
@@ -2907,6 +2934,7 @@ zio_write_gang_block(zio_t *pio, metaslab_class_t *mc)
 		zp.zp_nopwrite = B_FALSE;
 		zp.zp_encrypt = gio->io_prop.zp_encrypt;
 		zp.zp_byteorder = gio->io_prop.zp_byteorder;
+		zp.zp_direct_write = B_FALSE;
 		memset(zp.zp_salt, 0, ZIO_DATA_SALT_LEN);
 		memset(zp.zp_iv, 0, ZIO_DATA_IV_LEN);
 		memset(zp.zp_mac, 0, ZIO_DATA_MAC_LEN);
@@ -4322,6 +4350,58 @@ zio_checksum_verify(zio_t *zio)
 	return (zio);
 }
 
+static zio_t *
+zio_dio_checksum_verify(zio_t *zio)
+{
+	int error = 0;
+
+	zio_t *pio = zio_unique_parent(zio);
+	boolean_t verify_checksum = B_FALSE;
+
+	ASSERT3P(zio->io_vd, !=, NULL);
+	ASSERT3P(zio->io_bp, !=, NULL);
+	ASSERT3U(zio->io_child_type, ==, ZIO_CHILD_VDEV);
+	ASSERT3U(zio->io_type, ==, ZIO_TYPE_WRITE);
+	ASSERT3B(pio->io_prop.zp_direct_write, ==, B_TRUE);
+	ASSERT3U(pio->io_child_type, ==, ZIO_CHILD_LOGICAL);
+
+	mutex_enter(&zio->io_vd->vdev_stat_lock);
+	zio->io_vd->vdev_direct_write_verify_cnt += 1;
+	if ((zio->io_vd->vdev_direct_write_verify_cnt %
+	    zfs_vdev_direct_write_verify_cnt) == 0) {
+		verify_checksum = B_TRUE;
+	} else {
+		mutex_exit(&zio->io_vd->vdev_stat_lock);
+		return (zio);
+	}
+
+	if (verify_checksum && (error = zio_checksum_error(zio, NULL)) != 0) {
+		if (error == ECKSUM) {
+			zio->io_vd->vdev_stat.vs_dio_verify_errors++;
+			zio->io_error = SET_ERROR(EINVAL);
+			zio->io_prop.zp_direct_write_verify_error = B_TRUE;
+
+			/*
+			 * The EINVAL error must be propagated up to the
+			 * logical parent ZIO in zio_notify_parent() so it can
+			 * be returned to dmu_write_abd().
+			 */
+			zio->io_flags &= ~ZIO_FLAG_DONT_PROPAGATE;
+
+			(void) zfs_ereport_post(FM_EREPORT_ZFS_DIO_VERIFY,
+			    zio->io_spa, zio->io_vd, &zio->io_bookmark,
+			    zio, 0);
+		}
+	} else {
+		zio->io_error = error;
+	}
+
+	mutex_exit(&zio->io_vd->vdev_stat_lock);
+
+	return (zio);
+}
+
+
 /*
  * Called by RAID-Z to ensure we don't compute the checksum twice.
  */
@@ -4647,7 +4727,8 @@ zio_done(zio_t *zio)
 		 * device is currently unavailable.
 		 */
 		if (zio->io_error != ECKSUM && zio->io_vd != NULL &&
-		    !vdev_is_dead(zio->io_vd)) {
+		    !vdev_is_dead(zio->io_vd) &&
+		    zio->io_prop.zp_direct_write_verify_error == B_FALSE) {
 			int ret = zfs_ereport_post(FM_EREPORT_ZFS_IO,
 			    zio->io_spa, zio->io_vd, &zio->io_bookmark, zio, 0);
 			if (ret != EALREADY) {
@@ -4662,7 +4743,8 @@ zio_done(zio_t *zio)
 
 		if ((zio->io_error == EIO || !(zio->io_flags &
 		    (ZIO_FLAG_SPECULATIVE | ZIO_FLAG_DONT_PROPAGATE))) &&
-		    zio == zio->io_logical) {
+		    zio == zio->io_logical &&
+		    zio->io_prop.zp_direct_write_verify_error == B_FALSE) {
 			/*
 			 * For logical I/O requests, tell the SPA to log the
 			 * error and generate a logical data ereport.
@@ -4898,6 +4980,7 @@ static zio_pipe_stage_t *zio_pipeline[] = {
 	zio_vdev_io_done,
 	zio_vdev_io_assess,
 	zio_checksum_verify,
+	zio_dio_checksum_verify,
 	zio_done
 };
 

@@ -59,6 +59,7 @@
 #include <sys/objlist.h>
 #include <sys/zpl.h>
 #include <linux/vfs_compat.h>
+#include <linux/fs.h>
 #include "zfs_comutil.h"
 
 enum {
@@ -1517,6 +1518,12 @@ zfs_domount(struct super_block *sb, zfs_mnt_t *zm, int silent)
 		goto out;
 
 	sb->s_bdi->ra_pages = 0;
+
+#if defined(SB_I_STABLE_WRITES)
+	sb->s_iflags |= SB_I_STABLE_WRITES;
+#elif defined(BDI_CAP_STABLE_WRITES)
+	sb->s_bdi->capabilities |= BDI_CAP_STABLE_WRITES;
+#endif
 
 	/* Set callback operations for the file system. */
 	sb->s_op = &zpl_super_operations;

@@ -314,7 +314,7 @@ zpl_uio_init(zfs_uio_t *uio, struct kiocb *kiocb, struct iov_iter *to,
 }
 
 static ssize_t
-zpl_iter_read(struct kiocb *kiocb, struct iov_iter *to)
+zpl_iter_read_buffered(struct kiocb *kiocb, struct iov_iter *to)
 {
 	cred_t *cr = CRED();
 	fstrans_cookie_t cookie;
@@ -327,8 +327,9 @@ zpl_iter_read(struct kiocb *kiocb, struct iov_iter *to)
 	crhold(cr);
 	cookie = spl_fstrans_mark();
 
+	int flags = (filp->f_flags | zfs_io_flags(kiocb)) & ~O_DIRECT;
 	int error = -zfs_read(ITOZ(filp->f_mapping->host), &uio,
-	    filp->f_flags | zfs_io_flags(kiocb), cr);
+	    flags, cr);
 
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
@@ -342,6 +343,84 @@ zpl_iter_read(struct kiocb *kiocb, struct iov_iter *to)
 	zpl_file_accessed(filp);
 
 	return (read);
+}
+
+static ssize_t
+zpl_iter_read_direct(struct kiocb *kiocb, struct iov_iter *to)
+{
+	cred_t *cr = CRED();
+	struct file *filp = kiocb->ki_filp;
+	struct inode *ip = filp->f_mapping->host;
+	ssize_t count = iov_iter_count(to);
+	int flags = filp->f_flags | zfs_io_flags(kiocb);
+	zfs_uio_t uio;
+	ssize_t ret;
+
+	/*
+	 * Attempt to flush out any pages from the page cache. On error
+	 * fallback to the buffered path.
+	 */
+	ret = filemap_write_and_wait_range(filp->f_mapping, kiocb->ki_pos,
+	    kiocb->ki_pos + count - 1);
+
+	if (ret < 0)
+		return (ret);
+
+	zpl_uio_init(&uio, kiocb, to, kiocb->ki_pos, count, 0);
+
+	/* On error, return to fallback to the buffered path. */
+	ret = zfs_setup_direct(ITOZ(ip), &uio, UIO_READ, &flags);
+	if (ret)
+		return (-ret);
+
+	ASSERT(uio.uio_extflg & UIO_DIRECT);
+
+	crhold(cr);
+	fstrans_cookie_t cookie = spl_fstrans_mark();
+
+	int error = -zfs_read(ITOZ(ip), &uio, flags, cr);
+
+	spl_fstrans_unmark(cookie);
+	crfree(cr);
+
+	zfs_uio_free_dio_pages(&uio, UIO_READ);
+
+	if (error < 0)
+		return (error);
+
+	ssize_t read = count - uio.uio_resid;
+	kiocb->ki_pos += read;
+
+	zpl_file_accessed(filp);
+
+	return (read);
+}
+
+static ssize_t
+zpl_iter_read(struct kiocb *kiocb, struct iov_iter *to)
+{
+	struct inode *ip = kiocb->ki_filp->f_mapping->host;
+	struct file *filp = kiocb->ki_filp;
+	int flags = filp->f_flags | zfs_io_flags(kiocb);
+	int error = 0;
+
+	zfs_direct_enabled_t direct =
+	    zfs_check_direct_enabled(ITOZ(ip), flags, &error);
+
+	if (direct == ZFS_DIRECT_IO_ERR) {
+		return (-error);
+	} else if (direct == ZFS_DIRECT_IO_ENABLED) {
+		ssize_t read = zpl_iter_read_direct(kiocb, to);
+		/*
+		 * In the event we get EAGAIN we are falling back to
+		 * buffered IO.
+		 */
+		if ((read == -EINVAL || !iov_iter_count(to)) &&
+		    read != -EAGAIN)
+			return (read);
+	}
+
+	return (zpl_iter_read_buffered(kiocb, to));
 }
 
 static inline ssize_t
@@ -370,27 +449,22 @@ zpl_generic_write_checks(struct kiocb *kiocb, struct iov_iter *from,
 }
 
 static ssize_t
-zpl_iter_write(struct kiocb *kiocb, struct iov_iter *from)
+zpl_iter_write_buffered(struct kiocb *kiocb, struct iov_iter *from)
 {
 	cred_t *cr = CRED();
-	fstrans_cookie_t cookie;
 	struct file *filp = kiocb->ki_filp;
 	struct inode *ip = filp->f_mapping->host;
+	size_t wrote;
+	size_t count = iov_iter_count(from);
+
 	zfs_uio_t uio;
-	size_t count = 0;
-	ssize_t ret;
-
-	ret = zpl_generic_write_checks(kiocb, from, &count);
-	if (ret)
-		return (ret);
-
 	zpl_uio_init(&uio, kiocb, from, kiocb->ki_pos, count, from->iov_offset);
 
 	crhold(cr);
-	cookie = spl_fstrans_mark();
+	fstrans_cookie_t cookie = spl_fstrans_mark();
 
-	int error = -zfs_write(ITOZ(ip), &uio,
-	    filp->f_flags | zfs_io_flags(kiocb), cr);
+	int flags = (filp->f_flags | zfs_io_flags(kiocb)) & ~O_DIRECT;
+	int error = -zfs_write(ITOZ(ip), &uio, flags, cr);
 
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
@@ -398,16 +472,112 @@ zpl_iter_write(struct kiocb *kiocb, struct iov_iter *from)
 	if (error < 0)
 		return (error);
 
-	ssize_t wrote = count - uio.uio_resid;
+	wrote = count - uio.uio_resid;
 	kiocb->ki_pos += wrote;
 
+	if (wrote > 0)
+		iov_iter_advance(from, wrote);
+
 	return (wrote);
+}
+
+static ssize_t
+zpl_iter_write_direct(struct kiocb *kiocb, struct iov_iter *from)
+{
+	cred_t *cr = CRED();
+	struct file *filp = kiocb->ki_filp;
+	struct inode *ip = filp->f_mapping->host;
+	size_t wrote;
+	int flags = filp->f_flags | zfs_io_flags(kiocb);
+	size_t count = iov_iter_count(from);
+
+	zfs_uio_t uio;
+	zpl_uio_init(&uio, kiocb, from, kiocb->ki_pos, count, from->iov_offset);
+
+	/* On error, return to fallback to the buffered path. */
+	ssize_t ret = zfs_setup_direct(ITOZ(ip), &uio, UIO_WRITE, &flags);
+	if (ret)
+		return (-ret);
+
+	ASSERT(uio.uio_extflg & UIO_DIRECT);
+
+	crhold(cr);
+	fstrans_cookie_t cookie = spl_fstrans_mark();
+
+	int error = -zfs_write(ITOZ(ip), &uio, flags, cr);
+
+	spl_fstrans_unmark(cookie);
+	crfree(cr);
+
+	zfs_uio_free_dio_pages(&uio, UIO_WRITE);
+
+	if (error < 0)
+		return (error);
+
+	wrote = count - uio.uio_resid;
+
+	return (wrote);
+}
+
+static ssize_t
+zpl_iter_write(struct kiocb *kiocb, struct iov_iter *from)
+{
+	struct inode *ip = kiocb->ki_filp->f_mapping->host;
+	struct file *filp = kiocb->ki_filp;
+	int flags = filp->f_flags | zfs_io_flags(kiocb);
+	size_t count = 0;
+	int error = 0;
+
+	ssize_t ret = zpl_generic_write_checks(kiocb, from, &count);
+	if (ret)
+		return (ret);
+
+	loff_t offset = kiocb->ki_pos;
+
+	zfs_direct_enabled_t direct =
+	    zfs_check_direct_enabled(ITOZ(ip), flags, &error);
+
+	if (direct == ZFS_DIRECT_IO_ERR) {
+		return (-error);
+	} else if (direct == ZFS_DIRECT_IO_ENABLED) {
+		/*
+		 * zpl_generic_file_direct_write() will attempt to flush out any
+		 * pages in the page cache and invalidate them. If this is
+		 * successful it will cal the direct_IO
+		 * address_space_operation (zpl_iter_write_direct()).
+		 */
+		ssize_t wrote = zpl_generic_file_direct_write(kiocb, from,
+		    kiocb->ki_pos);
+
+		/*
+		 * In the event we get EAGAIN we are falling back to
+		 * buffered IO.
+		 */
+		if ((wrote == -EINVAL || !iov_iter_count(from)) &&
+		    wrote != -EAGAIN) {
+			/*
+			 * generic_file_direct_write() will update
+			 * kiocb->ki_pos on a successful Direct IO write.
+			 */
+			IMPLY(!iov_iter_count(from),
+			    (offset + count) == kiocb->ki_pos);
+			return (wrote);
+		} else {
+			/*
+			 * If we are falling back to a buffered write, then the
+			 * file position should not be updated at this point.
+			 */
+			ASSERT3U(offset, ==, kiocb->ki_pos);
+		}
+	}
+
+	return (zpl_iter_write_buffered(kiocb, from));
 }
 
 #else /* !HAVE_VFS_RW_ITERATE */
 
 static ssize_t
-zpl_aio_read(struct kiocb *kiocb, const struct iovec *iov,
+zpl_aio_read_buffered(struct kiocb *kiocb, const struct iovec *iov,
     unsigned long nr_segs, loff_t pos)
 {
 	cred_t *cr = CRED();
@@ -427,8 +597,9 @@ zpl_aio_read(struct kiocb *kiocb, const struct iovec *iov,
 	crhold(cr);
 	cookie = spl_fstrans_mark();
 
+	int flags = (filp->f_flags | zfs_io_flags(kiocb)) & ~O_DIRECT;
 	int error = -zfs_read(ITOZ(filp->f_mapping->host), &uio,
-	    filp->f_flags | zfs_io_flags(kiocb), cr);
+	    flags, cr);
 
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
@@ -445,7 +616,99 @@ zpl_aio_read(struct kiocb *kiocb, const struct iovec *iov,
 }
 
 static ssize_t
-zpl_aio_write(struct kiocb *kiocb, const struct iovec *iov,
+zpl_aio_read_direct(struct kiocb *kiocb, const struct iovec *iov,
+    unsigned long nr_segs, loff_t pos)
+{
+	cred_t *cr = CRED();
+	fstrans_cookie_t cookie;
+	struct file *filp = kiocb->ki_filp;
+	struct inode *ip = filp->f_mapping->host;
+	int flags = filp->f_flags | zfs_io_flags(kiocb);
+	size_t count;
+	ssize_t ret;
+
+	ret = generic_segment_checks(iov, &nr_segs, &count, VERIFY_WRITE);
+	if (ret)
+		return (ret);
+
+	/*
+	 * Attempt to flush out any pages from the page cache. On error
+	 * fallback to the buffered path.
+	 */
+	ret = filemap_write_and_wait_range(filp->f_mapping, kiocb->ki_pos,
+	    kiocb->ki_pos + iov_length(iov, nr_segs) - 1);
+
+	if (ret < 0)
+		return (ret);
+
+	zfs_uio_t uio;
+	zfs_uio_iovec_init(&uio, iov, nr_segs, kiocb->ki_pos, UIO_USERSPACE,
+	    count, 0);
+
+	/* On error, return to fallback to the buffered path */
+	ret = zfs_setup_direct(ITOZ(ip), &uio, UIO_READ, &flags);
+	if (ret)
+		return (-ret);
+
+	ASSERT(uio.uio_extflg & UIO_DIRECT);
+
+	crhold(cr);
+	cookie = spl_fstrans_mark();
+
+	int error = -zfs_read(ITOZ(ip), &uio, flags, cr);
+
+	spl_fstrans_unmark(cookie);
+	crfree(cr);
+
+	zfs_uio_free_dio_pages(&uio, UIO_READ);
+
+	if (error < 0)
+		return (error);
+
+	ssize_t read = count - uio.uio_resid;
+	kiocb->ki_pos += read;
+
+	zpl_file_accessed(filp);
+
+	return (read);
+}
+
+static ssize_t
+zpl_aio_read(struct kiocb *kiocb, const struct iovec *iov,
+    unsigned long nr_segs, loff_t pos)
+{
+	struct inode *ip = kiocb->ki_filp->f_mapping->host;
+	struct file *filp = kiocb->ki_filp;
+	int flags = filp->f_flags | zfs_io_flags(kiocb);
+	size_t count;
+	ssize_t ret;
+	int error = 0;
+
+	ret = generic_segment_checks(iov, &nr_segs, &count, VERIFY_WRITE);
+	if (ret)
+		return (ret);
+
+	zfs_direct_enabled_t direct =
+	    zfs_check_direct_enabled(ITOZ(ip), flags, &error);
+
+	if (direct == ZFS_DIRECT_IO_ERR) {
+		return (-error);
+	} else if (direct == ZFS_DIRECT_IO_ENABLED) {
+		/*
+		 * In the event we get EAGAIN we are falling back to
+		 * buffered IO.
+		 */
+		ssize_t read = zpl_aio_read_direct(kiocb, iov, nr_segs, pos);
+		if ((read == -EINVAL || read == count) &&
+		    read != -EAGAIN)
+			return (read);
+	}
+
+	return (zpl_aio_read_buffered(kiocb, iov, nr_segs, pos));
+}
+
+static ssize_t
+zpl_aio_write_buffered(struct kiocb *kiocb, const struct iovec *iov,
     unsigned long nr_segs, loff_t pos)
 {
 	cred_t *cr = CRED();
@@ -459,12 +722,6 @@ zpl_aio_write(struct kiocb *kiocb, const struct iovec *iov,
 	if (ret)
 		return (ret);
 
-	ret = generic_write_checks(filp, &pos, &count, S_ISBLK(ip->i_mode));
-	if (ret)
-		return (ret);
-
-	kiocb->ki_pos = pos;
-
 	zfs_uio_t uio;
 	zfs_uio_iovec_init(&uio, iov, nr_segs, kiocb->ki_pos, UIO_USERSPACE,
 	    count, 0);
@@ -472,8 +729,8 @@ zpl_aio_write(struct kiocb *kiocb, const struct iovec *iov,
 	crhold(cr);
 	cookie = spl_fstrans_mark();
 
-	int error = -zfs_write(ITOZ(ip), &uio,
-	    filp->f_flags | zfs_io_flags(kiocb), cr);
+	int flags = (filp->f_flags | zfs_io_flags(kiocb)) & ~O_DIRECT;
+	int error = -zfs_write(ITOZ(ip), &uio, flags, cr);
 
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
@@ -486,36 +743,145 @@ zpl_aio_write(struct kiocb *kiocb, const struct iovec *iov,
 
 	return (wrote);
 }
+
+static ssize_t
+zpl_aio_write_direct(struct kiocb *kiocb, const struct iovec *iov,
+    unsigned long nr_segs, loff_t pos)
+{
+	cred_t *cr = CRED();
+	fstrans_cookie_t cookie;
+	struct file *filp = kiocb->ki_filp;
+	struct inode *ip = filp->f_mapping->host;
+	int flags = filp->f_flags | zfs_io_flags(kiocb);
+	size_t count;
+	ssize_t ret;
+
+	ret = generic_segment_checks(iov, &nr_segs, &count, VERIFY_READ);
+	if (ret)
+		return (ret);
+
+	zfs_uio_t uio;
+	zfs_uio_iovec_init(&uio, iov, nr_segs, kiocb->ki_pos, UIO_USERSPACE,
+	    count, 0);
+
+	/* On error, return to fallback to the buffered path. */
+	ret = zfs_setup_direct(ITOZ(ip), &uio, UIO_WRITE, &flags);
+	if (ret)
+		return (-ret);
+
+	ASSERT(uio.uio_extflg & UIO_DIRECT);
+
+	crhold(cr);
+	cookie = spl_fstrans_mark();
+
+	int error = -zfs_write(ITOZ(ip), &uio, flags, cr);
+
+	spl_fstrans_unmark(cookie);
+	crfree(cr);
+
+	zfs_uio_free_dio_pages(&uio, UIO_WRITE);
+
+	if (error < 0)
+		return (error);
+
+	ssize_t wrote = count - uio.uio_resid;
+
+	return (wrote);
+}
+
+static ssize_t
+zpl_aio_write(struct kiocb *kiocb, const struct iovec *iov,
+    unsigned long nr_segs, loff_t pos)
+{
+	struct file *filp = kiocb->ki_filp;
+	struct inode *ip = filp->f_mapping->host;
+	int flags = filp->f_flags | zfs_io_flags(kiocb);
+	size_t ocount;
+	size_t count;
+	ssize_t ret;
+	int error = 0;
+
+	ret = generic_segment_checks(iov, &nr_segs, &ocount, VERIFY_READ);
+	if (ret)
+		return (ret);
+
+	count = ocount;
+
+	ret = generic_write_checks(filp, &pos, &count, S_ISBLK(ip->i_mode));
+	if (ret)
+		return (ret);
+
+	kiocb->ki_pos = pos;
+
+	zfs_direct_enabled_t direct =
+	    zfs_check_direct_enabled(ITOZ(ip), flags, &error);
+
+	if (direct == ZFS_DIRECT_IO_ERR) {
+		return (-error);
+	} else if (direct == ZFS_DIRECT_IO_ENABLED) {
+		/*
+		 * zpl_generic_file_direct_write() will attempt to flush out any
+		 * pages in the page cahce and invalidate them. If this is
+		 * successful it will call the direct_IO
+		 * address_space_operation (zpl_aio_write_direct()).
+		 */
+		ssize_t wrote = zpl_generic_file_direct_write(kiocb, iov,
+		    &nr_segs, pos, &kiocb->ki_pos, count, ocount);
+		/*
+		 * In the event we get EAGAIN we are falling back to
+		 * buffered IO.
+		 */
+		if ((wrote == -EINVAL || wrote == count) &&
+		    wrote != -EAGAIN) {
+			/*
+			 * generic_file_direct_write() will update
+			 * kiocb->ki_pos on a successful Direct IO write.
+			 */
+			IMPLY(wrote == count, (pos + count) == kiocb->ki_pos);
+			return (wrote);
+		} else {
+			/*
+			 * If we are falling back to a buffered write, then the
+			 * file position should not be updated at this point.
+			 */
+			ASSERT3U(pos, ==, kiocb->ki_pos);
+		}
+	}
+
+	return (zpl_aio_write_buffered(kiocb, iov, nr_segs, pos));
+}
+
 #endif /* HAVE_VFS_RW_ITERATE */
 
 #if defined(HAVE_VFS_RW_ITERATE)
-static ssize_t
-zpl_direct_IO_impl(int rw, struct kiocb *kiocb, struct iov_iter *iter)
-{
-	if (rw == WRITE)
-		return (zpl_iter_write(kiocb, iter));
-	else
-		return (zpl_iter_read(kiocb, iter));
-}
 #if defined(HAVE_VFS_DIRECT_IO_ITER)
 static ssize_t
 zpl_direct_IO(struct kiocb *kiocb, struct iov_iter *iter)
 {
-	return (zpl_direct_IO_impl(iov_iter_rw(iter), kiocb, iter));
+	if (iov_iter_rw(iter) == WRITE)
+		return (zpl_iter_write_direct(kiocb, iter));
+	else
+		return (zpl_iter_read(kiocb, iter));
 }
 #elif defined(HAVE_VFS_DIRECT_IO_ITER_OFFSET)
 static ssize_t
 zpl_direct_IO(struct kiocb *kiocb, struct iov_iter *iter, loff_t pos)
 {
 	ASSERT3S(pos, ==, kiocb->ki_pos);
-	return (zpl_direct_IO_impl(iov_iter_rw(iter), kiocb, iter));
+	if (iov_iter_rw(iter) == WRITE)
+		return (zpl_iter_write_direct(kiocb, iter));
+	else
+		return (zpl_iter_read(kiocb, iter));
 }
 #elif defined(HAVE_VFS_DIRECT_IO_ITER_RW_OFFSET)
 static ssize_t
 zpl_direct_IO(int rw, struct kiocb *kiocb, struct iov_iter *iter, loff_t pos)
 {
 	ASSERT3S(pos, ==, kiocb->ki_pos);
-	return (zpl_direct_IO_impl(rw, kiocb, iter));
+	if (rw == WRITE)
+		return (zpl_iter_write_direct(kiocb, iter));
+	else
+		return (zpl_iter_read(kiocb, iter));
 }
 #else
 #error "Unknown direct IO interface"
@@ -529,7 +895,7 @@ zpl_direct_IO(int rw, struct kiocb *kiocb, const struct iovec *iov,
     loff_t pos, unsigned long nr_segs)
 {
 	if (rw == WRITE)
-		return (zpl_aio_write(kiocb, iov, nr_segs, pos));
+		return (zpl_aio_write_direct(kiocb, iov, nr_segs, pos));
 	else
 		return (zpl_aio_read(kiocb, iov, nr_segs, pos));
 }
@@ -542,7 +908,7 @@ zpl_direct_IO(int rw, struct kiocb *kiocb, struct iov_iter *iter, loff_t pos)
 
 	ASSERT3S(pos, ==, kiocb->ki_pos);
 	if (rw == WRITE)
-		return (zpl_aio_write(kiocb, iovp, nr_segs, pos));
+		return (zpl_aio_write_direct(kiocb, iovp, nr_segs, pos));
 	else
 		return (zpl_aio_read(kiocb, iovp, nr_segs, pos));
 }
@@ -625,14 +991,12 @@ static int
 zpl_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	struct inode *ip = filp->f_mapping->host;
-	znode_t *zp = ITOZ(ip);
-	int error;
-	fstrans_cookie_t cookie;
 
-	cookie = spl_fstrans_mark();
-	error = -zfs_map(ip, vma->vm_pgoff, (caddr_t *)vma->vm_start,
+	fstrans_cookie_t cookie = spl_fstrans_mark();
+	int error = -zfs_map(ip, vma->vm_pgoff, (caddr_t *)vma->vm_start,
 	    (size_t)(vma->vm_end - vma->vm_start), vma->vm_flags);
 	spl_fstrans_unmark(cookie);
+
 	if (error)
 		return (error);
 
@@ -640,9 +1004,12 @@ zpl_mmap(struct file *filp, struct vm_area_struct *vma)
 	if (error)
 		return (error);
 
+#if !defined(HAVE_FILEMAP_RANGE_HAS_PAGE)
+	znode_t *zp = ITOZ(ip);
 	mutex_enter(&zp->z_lock);
 	zp->z_is_mapped = B_TRUE;
 	mutex_exit(&zp->z_lock);
+#endif
 
 	return (error);
 }
@@ -937,7 +1304,7 @@ zpl_fadvise(struct file *filp, loff_t offset, loff_t len, int advice)
 	case POSIX_FADV_SEQUENTIAL:
 	case POSIX_FADV_WILLNEED:
 #ifdef HAVE_GENERIC_FADVISE
-		if (zn_has_cached_data(zp))
+		if (zn_has_cached_data(zp, offset, offset + len - 1))
 			error = generic_fadvise(filp, offset, len, advice);
 #endif
 		/*

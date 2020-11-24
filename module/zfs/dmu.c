@@ -51,7 +51,6 @@
 #include <sys/zio_compress.h>
 #include <sys/sa.h>
 #include <sys/zfeature.h>
-#include <sys/abd.h>
 #include <sys/trace_zfs.h>
 #include <sys/zfs_racct.h>
 #include <sys/zfs_rlock.h>
@@ -179,6 +178,7 @@ dmu_buf_hold_noread_by_dnode(dnode_t *dn, uint64_t offset,
 	*dbp = &db->db;
 	return (0);
 }
+
 int
 dmu_buf_hold_noread(objset_t *os, uint64_t object, uint64_t offset,
     const void *tag, dmu_buf_t **dbp)
@@ -511,7 +511,7 @@ dmu_buf_hold_array_by_dnode(dnode_t *dn, uint64_t offset, uint64_t length,
 	zio_t *zio = NULL;
 	boolean_t missed = B_FALSE;
 
-	ASSERT(length <= DMU_MAX_ACCESS);
+	ASSERT3U(length, <=, DMU_MAX_ACCESS);
 
 	/*
 	 * Note: We directly notify the prefetch code of this read, so that
@@ -586,8 +586,16 @@ dmu_buf_hold_array_by_dnode(dnode_t *dn, uint64_t offset, uint64_t length,
 		dbp[i] = &db->db;
 	}
 
-	if (!read)
-		zfs_racct_write(length, nblks);
+	/*
+	 * If we are doing O_DIRECT we still hold the dbufs, even for reads,
+	 * but we do not issue any reads here. We do not want to account for
+	 * writes in this case.
+	 *
+	 * O_DIRECT write/read accounting takes place in
+	 * dmu_{write/read}_abd().
+	 */
+	if (!read && ((flags & DMU_DIRECTIO) == 0))
+		zfs_racct_write(dn->dn_objset->os_spa, length, nblks, flags);
 
 	if (zs)
 		dmu_zfetch_run(zs, missed, B_TRUE);
@@ -749,7 +757,7 @@ dmu_prefetch(objset_t *os, uint64_t object, int64_t level, uint64_t offset,
 
 /*
  * Get the next "chunk" of file data to free.  We traverse the file from
- * the end so that the file gets shorter over time (if we crashes in the
+ * the end so that the file gets shorter over time (if we crash in the
  * middle, this will leave us in a better state).  We find allocated file
  * data by simply searching the allocated level 1 indirects.
  *
@@ -1013,7 +1021,7 @@ dmu_read_impl(dnode_t *dn, uint64_t offset, uint64_t size,
 
 	/*
 	 * Deal with odd block sizes, where there can't be data past the first
-	 * block.  If we ever do the tail block optimization, we will need to
+	 * block. If we ever do the tail block optimization, we will need to
 	 * handle that here as well.
 	 */
 	if (dn->dn_maxblkid == 0) {
@@ -1021,6 +1029,18 @@ dmu_read_impl(dnode_t *dn, uint64_t offset, uint64_t size,
 		    MIN(size, dn->dn_datablksz - offset);
 		memset((char *)buf + newsz, 0, size - newsz);
 		size = newsz;
+	}
+
+	if (size == 0)
+		return (0);
+
+	/* Allow Direct IO when requested and properly aligned */
+	if ((flags & DMU_DIRECTIO) && zfs_dio_page_aligned(buf) &&
+	    zfs_dio_blksz_aligned(offset, size, SPA_MINBLOCKSIZE)) {
+		abd_t *data = abd_get_from_buf(buf, size);
+		err = dmu_read_abd(dn, offset, size, data, flags);
+		abd_free(data);
+		return (err);
 	}
 
 	while (size > 0) {
@@ -1131,22 +1151,41 @@ dmu_write(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 }
 
 /*
- * Note: Lustre is an external consumer of this interface.
+ * This interface is not used internally by ZFS but is provided for
+ * use by Lustre which is built on the DMU interfaces.
  */
-void
-dmu_write_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size,
-    const void *buf, dmu_tx_t *tx)
+int
+dmu_write_by_dnode_flags(dnode_t *dn, uint64_t offset, uint64_t size,
+    const void *buf, dmu_tx_t *tx, uint32_t flags)
 {
 	dmu_buf_t **dbp;
 	int numbufs;
+	int error;
 
 	if (size == 0)
-		return;
+		return (0);
+
+	/* Allow Direct IO when requested and properly aligned */
+	if ((flags & DMU_DIRECTIO) && zfs_dio_page_aligned((void *)buf) &&
+	    zfs_dio_blksz_aligned(offset, size, dn->dn_datablksz)) {
+		abd_t *data = abd_get_from_buf((void *)buf, size);
+		error = dmu_write_abd(dn, offset, size, data, DMU_DIRECTIO, tx);
+		abd_free(data);
+		return (error);
+	}
 
 	VERIFY0(dmu_buf_hold_array_by_dnode(dn, offset, size,
 	    FALSE, FTAG, &numbufs, &dbp, DMU_READ_PREFETCH));
 	dmu_write_impl(dbp, numbufs, offset, size, buf, tx);
 	dmu_buf_rele_array(dbp, numbufs, FTAG);
+	return (0);
+}
+
+int
+dmu_write_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size,
+    const void *buf, dmu_tx_t *tx)
+{
+	return (dmu_write_by_dnode_flags(dn, offset, size, buf, tx, 0));
 }
 
 void
@@ -1209,6 +1248,9 @@ dmu_read_uio_dnode(dnode_t *dn, zfs_uio_t *uio, uint64_t size)
 {
 	dmu_buf_t **dbp;
 	int numbufs, i, err;
+
+	if (uio->uio_extflg & UIO_DIRECT)
+		return (dmu_read_uio_direct(dn, uio, size));
 
 	/*
 	 * NB: we could do this block-at-a-time, but it's nice
@@ -1300,14 +1342,22 @@ dmu_write_uio_dnode(dnode_t *dn, zfs_uio_t *uio, uint64_t size, dmu_tx_t *tx)
 	dmu_buf_t **dbp;
 	int numbufs;
 	int err = 0;
-	int i;
+
+	/*
+	 * We only allow Direct IO writes to happen if we are block
+	 * sized aligned. Otherwise, we pass the write off to the ARC.
+	 */
+	if ((uio->uio_extflg & UIO_DIRECT) && zfs_dio_blksz_aligned(
+	    zfs_uio_offset(uio), size, dn->dn_datablksz)) {
+		return (dmu_write_uio_direct(dn, uio, size, tx));
+	}
 
 	err = dmu_buf_hold_array_by_dnode(dn, zfs_uio_offset(uio), size,
 	    FALSE, FTAG, &numbufs, &dbp, DMU_READ_PREFETCH);
 	if (err)
 		return (err);
 
-	for (i = 0; i < numbufs; i++) {
+	for (int i = 0; i < numbufs; i++) {
 		uint64_t tocpy;
 		int64_t bufoff;
 		dmu_buf_t *db = dbp[i];
@@ -1475,7 +1525,7 @@ dmu_assign_arcbuf_by_dnode(dnode_t *dn, uint64_t offset, arc_buf_t *buf,
 	 * same size as the dbuf.
 	 */
 	if (offset == db->db.db_offset && blksz == db->db.db_size) {
-		zfs_racct_write(blksz, 1);
+		zfs_racct_write(os->os_spa, blksz, 1, 0);
 		dbuf_assign_arcbuf(db, buf, tx);
 		dbuf_rele(db, FTAG);
 	} else {
@@ -1505,23 +1555,22 @@ dmu_assign_arcbuf_by_dbuf(dmu_buf_t *handle, uint64_t offset, arc_buf_t *buf,
 	return (err);
 }
 
-typedef struct {
-	dbuf_dirty_record_t	*dsa_dr;
-	dmu_sync_cb_t		*dsa_done;
-	zgd_t			*dsa_zgd;
-	dmu_tx_t		*dsa_tx;
-} dmu_sync_arg_t;
-
-static void
+void
 dmu_sync_ready(zio_t *zio, arc_buf_t *buf, void *varg)
 {
 	(void) buf;
 	dmu_sync_arg_t *dsa = varg;
-	dmu_buf_t *db = dsa->dsa_zgd->zgd_db;
-	blkptr_t *bp = zio->io_bp;
 
 	if (zio->io_error == 0) {
+		dbuf_dirty_record_t *dr = dsa->dsa_dr;
+		blkptr_t *bp = zio->io_bp;
+
 		if (BP_IS_HOLE(bp)) {
+			dmu_buf_t *db = NULL;
+			if (dr)
+				db = &(dr->dr_dbuf->db);
+			else
+				db = dsa->dsa_zgd->zgd_db;
 			/*
 			 * A block of zeros may compress to a hole, but the
 			 * block size still needs to be known for replay.
@@ -1540,7 +1589,7 @@ dmu_sync_late_arrival_ready(zio_t *zio)
 	dmu_sync_ready(zio, NULL, zio->io_private);
 }
 
-static void
+void
 dmu_sync_done(zio_t *zio, arc_buf_t *buf, void *varg)
 {
 	(void) buf;
@@ -1553,7 +1602,7 @@ dmu_sync_done(zio_t *zio, arc_buf_t *buf, void *varg)
 	 * Record the vdev(s) backing this blkptr so they can be flushed after
 	 * the writes for the lwb have completed.
 	 */
-	if (zio->io_error == 0) {
+	if (zgd && zio->io_error == 0) {
 		zil_lwb_add_block(zgd->zgd_lwb, zgd->zgd_bp);
 	}
 
@@ -1592,10 +1641,12 @@ dmu_sync_done(zio_t *zio, arc_buf_t *buf, void *varg)
 	} else {
 		dr->dt.dl.dr_override_state = DR_NOT_OVERRIDDEN;
 	}
+
 	cv_broadcast(&db->db_changed);
 	mutex_exit(&db->db_mtx);
 
-	dsa->dsa_done(dsa->dsa_zgd, zio->io_error);
+	if (dsa->dsa_done)
+		dsa->dsa_done(dsa->dsa_zgd, zio->io_error);
 
 	kmem_free(dsa, sizeof (*dsa));
 }
@@ -1851,7 +1902,7 @@ dmu_sync(zio_t *pio, uint64_t txg, dmu_sync_cb_t *done, zgd_t *zgd)
 	dsa->dsa_tx = NULL;
 
 	zio_nowait(arc_write(pio, os->os_spa, txg,
-	    zgd->zgd_bp, dr->dt.dl.dr_data, dbuf_is_l2cacheable(db),
+	    zgd->zgd_bp, dr->dt.dl.dr_data, dbuf_is_l2cacheable(db, NULL),
 	    &zp, dmu_sync_ready, NULL, NULL, dmu_sync_done, dsa,
 	    ZIO_PRIORITY_SYNC_WRITE, ZIO_FLAG_CANFAIL, &zb));
 
@@ -2094,6 +2145,8 @@ dmu_write_policy(objset_t *os, dnode_t *dn, int level, int wp, zio_prop_t *zp)
 	zp->zp_nopwrite = nopwrite;
 	zp->zp_encrypt = encrypt;
 	zp->zp_byteorder = ZFS_HOST_BYTEORDER;
+	zp->zp_direct_write = (wp & WP_DIRECT_WR) ? B_TRUE : B_FALSE;
+	zp->zp_direct_write_verify_error = B_FALSE;
 	memset(zp->zp_salt, 0, ZIO_DATA_SALT_LEN);
 	memset(zp->zp_iv, 0, ZIO_DATA_IV_LEN);
 	memset(zp->zp_mac, 0, ZIO_DATA_MAC_LEN);
@@ -2340,8 +2393,15 @@ EXPORT_SYMBOL(dmu_free_long_range);
 EXPORT_SYMBOL(dmu_free_long_object);
 EXPORT_SYMBOL(dmu_read);
 EXPORT_SYMBOL(dmu_read_by_dnode);
+EXPORT_SYMBOL(dmu_read_uio);
+EXPORT_SYMBOL(dmu_read_uio_dbuf);
+EXPORT_SYMBOL(dmu_read_uio_dnode);
 EXPORT_SYMBOL(dmu_write);
 EXPORT_SYMBOL(dmu_write_by_dnode);
+EXPORT_SYMBOL(dmu_write_by_dnode_flags);
+EXPORT_SYMBOL(dmu_write_uio);
+EXPORT_SYMBOL(dmu_write_uio_dbuf);
+EXPORT_SYMBOL(dmu_write_uio_dnode);
 EXPORT_SYMBOL(dmu_prealloc);
 EXPORT_SYMBOL(dmu_object_info);
 EXPORT_SYMBOL(dmu_object_info_from_dnode);

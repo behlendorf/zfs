@@ -59,16 +59,17 @@ extern "C" {
 /*
  * The simplified state transition diagram for dbufs looks like:
  *
- *		+----> READ ----+
- *		|		|
- *		|		V
- *  (alloc)-->UNCACHED	     CACHED-->EVICTING-->(free)
- *		|		^	 ^
- *		|		|	 |
- *		+----> FILL ----+	 |
+ *		+----> READ -------------+
  *		|			 |
- *		|			 |
- *		+--------> NOFILL -------+
+ *		|			 V
+ *  (alloc)-->UNCACHED			CACHED-->EVICTING-->(free)
+ *		|			 ^          ^
+ *		|			 |	    |
+ *		+----> FILL -------------+	    |
+ *		|			 |	    |
+ *		|			 |	    |
+ *		+--------> NOFILL -------+-----> UNCACHED
+ *                                              (Direct IO)
  *
  * DB_SEARCH is an invalid state for a dbuf. It is used by dbuf_free_range
  * to find all dbufs in a range of a dnode and must be less than any other
@@ -374,6 +375,11 @@ void dbuf_assign_arcbuf(dmu_buf_impl_t *db, arc_buf_t *buf, dmu_tx_t *tx);
 dbuf_dirty_record_t *dbuf_dirty(dmu_buf_impl_t *db, dmu_tx_t *tx);
 dbuf_dirty_record_t *dbuf_dirty_lightweight(dnode_t *dn, uint64_t blkid,
     dmu_tx_t *tx);
+void dmu_buf_direct_mixed_io_wait(dmu_buf_impl_t *db, uint64_t txg,
+    boolean_t read);
+void dmu_buf_undirty(dmu_buf_impl_t *db, dmu_tx_t *tx);
+blkptr_t *dmu_buf_get_bp_from_dbuf(dmu_buf_impl_t *db);
+int dmu_buf_untransform_direct(dmu_buf_impl_t *db, spa_t *spa);
 arc_buf_t *dbuf_loan_arcbuf(dmu_buf_impl_t *db);
 void dmu_buf_write_embedded(dmu_buf_t *dbuf, void *data,
     bp_embedded_type_t etype, enum zio_compress comp,
@@ -438,6 +444,18 @@ dbuf_find_dirty_eq(dmu_buf_impl_t *db, uint64_t txg)
 	return (NULL);
 }
 
+/*
+ * All Direct IO writes happen in open context so the first dirty record will
+ * always be associated with the write. After a Direct IO write completes the
+ * dirty records dr_overriden state will bet DR_OVERRIDDEN and the dr_data will
+ * get set to NULL.
+ */
+static inline dbuf_dirty_record_t *
+dbuf_get_dirty_direct(dmu_buf_impl_t *db)
+{
+	return (list_head(&db->db_dirty_records));
+}
+
 #define	DBUF_GET_BUFC_TYPE(_db)	\
 	(dbuf_is_metadata(_db) ? ARC_BUFC_METADATA : ARC_BUFC_DATA)
 
@@ -446,7 +464,7 @@ dbuf_find_dirty_eq(dmu_buf_impl_t *db, uint64_t txg)
 	(dbuf_is_metadata(_db) &&					\
 	((_db)->db_objset->os_primary_cache == ZFS_CACHE_METADATA)))
 
-boolean_t dbuf_is_l2cacheable(dmu_buf_impl_t *db);
+boolean_t dbuf_is_l2cacheable(dmu_buf_impl_t *db, blkptr_t *db_bp);
 
 #ifdef ZFS_DEBUG
 

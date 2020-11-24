@@ -303,6 +303,7 @@ ZFS_OBJS := \
 	ddt.o \
 	ddt_zap.o \
 	dmu.o \
+	dmu_direct.o \
 	dmu_diff.o \
 	dmu_object.o \
 	dmu_objset.o \
