@@ -319,6 +319,12 @@ mappedread(znode_t *zp, int nbytes, zfs_uio_t *uio)
 
 		pp = find_lock_page(mp, start >> PAGE_SHIFT);
 		if (pp) {
+			while (PageWriteback(pp)) {
+				unlock_page(pp);
+				wait_on_page_bit(pp, PG_writeback);
+				lock_page(pp);
+			}
+
 			ASSERT(PageUptodate(pp));
 			unlock_page(pp);
 
