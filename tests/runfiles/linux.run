@@ -95,6 +95,10 @@ tags = ['functional', 'deadman']
 tests = ['devices_001_pos', 'devices_002_neg', 'devices_003_pos']
 tags = ['functional', 'devices']
 
+[tests/functional/direct:Linux]
+tests = ['dio_aligned_block', 'dio_grow_block', 'dio_property']
+tags = ['functional', 'direct']
+
 [tests/functional/events:Linux]
 tests = ['events_001_pos', 'events_002_pos', 'zed_rc_filter']
 tags = ['functional', 'events']

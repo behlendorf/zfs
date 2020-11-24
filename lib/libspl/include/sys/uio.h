@@ -82,6 +82,9 @@ typedef struct zfs_uio {
 #define	zfs_uio_iovlen(uio, idx)	(uio)->uio_iov[(idx)].iov_len
 #define	zfs_uio_iovbase(uio, idx)	(uio)->uio_iov[(idx)].iov_base
 
+#define	IO_ALIGNED(o, s, a)	(((o) % (a) == 0) && ((s) % (a) == 0))
+#define	IO_PAGE_ALIGNED(o, s)	IO_ALIGNED(o, s, PAGESIZE)
+
 static inline void
 zfs_uio_iov_at_index(zfs_uio_t *uio, uint_t idx, void **base, uint64_t *len)
 {
