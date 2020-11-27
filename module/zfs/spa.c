@@ -2541,6 +2541,7 @@ spa_livelist_delete_cb(void *arg, zthr_t *z)
 	uint64_t ll_obj = 0, count;
 	objset_t *mos = spa->spa_meta_objset;
 	uint64_t zap_obj = spa->spa_livelists_to_delete;
+	int err = 0;
 	/*
 	 * Determine the next livelist to delete. This function should only
 	 * be called if there is at least one deleted clone.
@@ -2556,7 +2557,7 @@ spa_livelist_delete_cb(void *arg, zthr_t *z)
 		dle = dsl_deadlist_first(ll);
 		ASSERT3P(dle, !=, NULL);
 		bplist_create(&to_free);
-		int err = dsl_process_sub_livelist(&dle->dle_bpobj, &to_free,
+		err = dsl_process_sub_livelist(&dle->dle_bpobj, &to_free,
 		    z, NULL);
 		if (err == 0) {
 			sublist_delete_arg_t sync_arg = {
@@ -2568,9 +2569,10 @@ spa_livelist_delete_cb(void *arg, zthr_t *z)
 			zfs_dbgmsg("deleting sublist (id %llu) from"
 			    " livelist %llu, %d remaining",
 			    dle->dle_bpobj.bpo_object, ll_obj, count - 1);
-			VERIFY0(dsl_sync_task(spa_name(spa), NULL,
+			err = dsl_sync_task(spa_name(spa), NULL,
 			    sublist_delete_sync, &sync_arg, 0,
-			    ZFS_SPACE_CHECK_DESTROY));
+			    ZFS_SPACE_CHECK_DESTROY);
+			VERIFY(err == 0 || spa_exiting_any(spa));
 		} else {
 			VERIFY3U(err, ==, EINTR);
 		}
@@ -2585,8 +2587,9 @@ spa_livelist_delete_cb(void *arg, zthr_t *z)
 		    .zap_obj = zap_obj
 		};
 		zfs_dbgmsg("deletion of livelist %llu completed", ll_obj);
-		VERIFY0(dsl_sync_task(spa_name(spa), NULL, livelist_delete_sync,
-		    &sync_arg, 0, ZFS_SPACE_CHECK_DESTROY));
+		err = dsl_sync_task(spa_name(spa), NULL, livelist_delete_sync,
+		    &sync_arg, 0, ZFS_SPACE_CHECK_DESTROY);
+		VERIFY(err == 0 || spa_exiting_any(spa));
 	}
 }
 

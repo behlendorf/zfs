@@ -657,6 +657,7 @@ spa_condense_indirect_thread(void *arg, zthr_t *zthr)
 {
 	spa_t *spa = arg;
 	vdev_t *vd;
+	int err = 0;
 
 	ASSERT3P(spa->spa_condensing_indirect, !=, NULL);
 	spa_config_enter(spa, SCL_VDEV, FTAG, RW_READER);
@@ -750,9 +751,10 @@ spa_condense_indirect_thread(void *arg, zthr_t *zthr)
 	if (zthr_iscancelled(zthr))
 		return;
 
-	VERIFY0(dsl_sync_task(spa_name(spa), NULL,
+	err = dsl_sync_task(spa_name(spa), NULL,
 	    spa_condense_indirect_complete_sync, sci, 0,
-	    ZFS_SPACE_CHECK_EXTRA_RESERVED));
+	    ZFS_SPACE_CHECK_EXTRA_RESERVED);
+	VERIFY(err == 0 || spa_exiting_any(spa));
 }
 
 /*
