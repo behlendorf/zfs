@@ -472,8 +472,8 @@ spa_config_eval_flags(spa_t *spa, spa_config_flag_t flags)
 }
 
 int
-_spa_config_enter_flags(spa_t *spa, int locks, const void *tag, krw_t rw,
-    spa_config_flag_t flags, const char *file, size_t line)
+spa_config_enter_flags(spa_t *spa, int locks, const void *tag, krw_t rw,
+    spa_config_flag_t flags)
 {
 	int error = 0;
 	int wlocks_held = 0;
@@ -523,21 +523,19 @@ _spa_config_enter_flags(spa_t *spa, int locks, const void *tag, krw_t rw,
 }
 
 void
-_spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw,
-    const char *file, size_t line)
+spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw)
 {
 	spa_config_flag_t flags = 0;
 
-	_spa_config_enter_flags(spa, locks, tag, rw, flags, file, line);
+	spa_config_enter_flags(spa, locks, tag, rw, flags);
 }
 
 int
-_spa_config_tryenter(spa_t *spa, int locks, void *tag, krw_t rw,
-    const char *file, size_t line)
+spa_config_tryenter(spa_t *spa, int locks, void *tag, krw_t rw)
 {
 
-	return (_spa_config_enter_flags(spa, locks, tag, rw,
-	    SCL_FLAG_TRYENTER, file, line) == 0);
+	return (spa_config_enter_flags(spa, locks, tag, rw,
+	    SCL_FLAG_TRYENTER) == 0);
 }
 
 void
@@ -894,11 +892,11 @@ spa_next(spa_t *prev)
  * have the namespace lock held.
  */
 void
-_spa_open_ref(spa_t *spa, void *tag, const char *file, size_t line)
+spa_open_ref(spa_t *spa, void *tag)
 {
 	ASSERT(zfs_refcount_count(&spa->spa_refcount) >= spa->spa_minref ||
 	    MUTEX_HELD(&spa_namespace_lock));
-	(void) _zfs_refcount_add(&spa->spa_refcount, tag, file, line);
+	zfs_refcount_add(&spa->spa_refcount, tag);
 }
 
 /*
@@ -1347,7 +1345,7 @@ spa_vdev_exit(spa_t *spa, vdev_t *vd, uint64_t txg, int error)
  * Lock the given spa_t for the purpose of changing vdev state.
  */
 void
-_spa_vdev_state_enter(spa_t *spa, int oplocks, const char *file, size_t line)
+spa_vdev_state_enter(spa_t *spa, int oplocks)
 {
 	int locks = SCL_STATE_ALL | oplocks;
 
@@ -1364,11 +1362,11 @@ _spa_vdev_state_enter(spa_t *spa, int oplocks, const char *file, size_t line)
 		int low = locks & ~(SCL_ZIO - 1);
 		int high = locks & ~low;
 
-		_spa_config_enter(spa, high, spa, RW_WRITER, file, line);
+		spa_config_enter(spa, high, spa, RW_WRITER);
 		vdev_hold(spa->spa_root_vdev);
-		_spa_config_enter(spa, low, spa, RW_WRITER, file, line);
+		spa_config_enter(spa, low, spa, RW_WRITER);
 	} else {
-		_spa_config_enter(spa, locks, spa, RW_WRITER, file, line);
+		spa_config_enter(spa, locks, spa, RW_WRITER);
 	}
 	spa->spa_vdev_locks = locks;
 }
@@ -2886,13 +2884,13 @@ EXPORT_SYMBOL(spa_remove);
 EXPORT_SYMBOL(spa_next);
 
 /* Refcount functions */
-EXPORT_SYMBOL(_spa_open_ref);
+EXPORT_SYMBOL(spa_open_ref);
 EXPORT_SYMBOL(spa_close);
 EXPORT_SYMBOL(spa_refcount_zero);
 
 /* Pool configuration lock */
-EXPORT_SYMBOL(_spa_config_tryenter);
-EXPORT_SYMBOL(_spa_config_enter);
+EXPORT_SYMBOL(spa_config_tryenter);
+EXPORT_SYMBOL(spa_config_enter);
 EXPORT_SYMBOL(spa_config_exit);
 EXPORT_SYMBOL(spa_config_held);
 
@@ -2901,7 +2899,7 @@ EXPORT_SYMBOL(spa_vdev_enter);
 EXPORT_SYMBOL(spa_vdev_exit);
 
 /* Pool vdev state change lock */
-EXPORT_SYMBOL(_spa_vdev_state_enter);
+EXPORT_SYMBOL(spa_vdev_state_enter);
 EXPORT_SYMBOL(spa_vdev_state_exit);
 
 /* Accessor functions */
