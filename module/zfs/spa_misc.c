@@ -908,8 +908,6 @@ spa_close_common(spa_t *spa, void *tag)
 {
 	if (zfs_refcount_remove(&spa->spa_refcount, tag) == spa->spa_minref) {
 		mutex_enter(&spa->spa_evicting_os_lock);
-		if (spa->spa_killer != NULL)
-			POINTER_INVALIDATE(&spa->spa_killer);
 		cv_broadcast(&spa->spa_evicting_os_cv);
 		mutex_exit(&spa->spa_evicting_os_lock);
 	}

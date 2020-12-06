@@ -431,8 +431,8 @@ void procfs_list_add(procfs_list_t *procfs_list, void *p);
 #define	kmem_debugging()	0
 #define	kmem_cache_reap_now(_c)	umem_cache_reap_now(_c);
 #define	kmem_cache_set_move(_c, _cb)	/* nothing */
-#define	POINTER_INVALIDATE(_pp)	(*(_pp) = (void *)((uintptr_t)(*(_pp)) | 0x1))
-#define	POINTER_IS_VALID(_p)	(!((uintptr_t)(p) & 0x1))
+#define	POINTER_INVALIDATE(_pp)	/* nothing */
+#define	POINTER_IS_VALID(_p)	0
 
 typedef umem_cache_t kmem_cache_t;
 
