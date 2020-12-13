@@ -2541,7 +2541,7 @@ spa_livelist_delete_cb(void *arg, zthr_t *z)
 	uint64_t ll_obj = 0, count;
 	objset_t *mos = spa->spa_meta_objset;
 	uint64_t zap_obj = spa->spa_livelists_to_delete;
-	int err = 0;
+	int err;
 	/*
 	 * Determine the next livelist to delete. This function should only
 	 * be called if there is at least one deleted clone.
