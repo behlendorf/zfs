@@ -577,9 +577,9 @@ vdev_rebuild_range(vdev_rebuild_t *vr, uint64_t start, uint64_t size)
 	if (err != 0) {
 		ASSERT(spa_exiting_any(spa));
 		dmu_tx_abort(tx);
-		mutex_enter(&vd->vdev_rebuild_io_lock);
-		vd->vdev_rebuild_inflight--;
-		mutex_exit(&vd->vdev_rebuild_io_lock);
+		mutex_enter(&vr->vr_io_lock);
+		vr->vr_bytes_inflight -= psize;
+		mutex_exit(&vr->vr_io_lock);
 		return (err);
 	}
 	uint64_t txg = dmu_tx_get_txg(tx);
