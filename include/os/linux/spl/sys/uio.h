@@ -62,7 +62,6 @@ typedef enum zfs_uio_seg {
 typedef struct {
 	struct page	**pages;
 	int		num_pages;
-	offset_t	orig_loffset;
 } zfs_uio_dio_t;
 
 typedef struct zfs_uio {
@@ -73,15 +72,16 @@ typedef struct zfs_uio {
 		struct iov_iter		*uio_iter;
 #endif
 	};
-	int		uio_iovcnt;
-	offset_t	uio_loffset;
-	zfs_uio_seg_t	uio_segflg;
+	int		uio_iovcnt;	/* Number of iovecs */
+	offset_t	uio_soffset;	/* Starting logical offset */
+	offset_t	uio_loffset;	/* Current logical offset */
+	zfs_uio_seg_t	uio_segflg;	/* Segment type */
 	boolean_t	uio_fault_disable;
-	uint16_t	uio_fmode;
-	uint16_t	uio_extflg;
-	ssize_t		uio_resid;
-	size_t		uio_skip;
-	zfs_uio_dio_t	uio_dio;
+	uint16_t	uio_fmode;	/* Access mode (unused) */
+	uint16_t	uio_extflg;	/* Extra flags (UIO_DIRECT) */
+	ssize_t		uio_resid;	/* Residual unprocessed bytes */
+	size_t		uio_skip;	/* Skipped bytes in current iovec */
+	zfs_uio_dio_t	uio_dio;	/* Direct IO users pages */
 } zfs_uio_t;
 
 #define	zfs_uio_segflg(u)		(u)->uio_segflg
@@ -91,6 +91,7 @@ typedef struct zfs_uio {
 #define	zfs_uio_iovlen(u, idx)		(u)->uio_iov[(idx)].iov_len
 #define	zfs_uio_iovbase(u, idx)		(u)->uio_iov[(idx)].iov_base
 #define	zfs_uio_fault_disable(u, set)	(u)->uio_fault_disable = set
+#define	zfs_uio_soffset(u)		(u)->uio_soffset
 #define	zfs_uio_rlimit_fsize(z, u)	(0)
 #define	zfs_uio_fault_move(p, n, rw, u)	zfs_uiomove((p), (n), (rw), (u))
 
@@ -143,8 +144,8 @@ zfs_uio_iovec_init(zfs_uio_t *uio, const struct iovec *iov,
 	uio->uio_extflg = 0;
 	uio->uio_resid = resid;
 	uio->uio_skip = skip;
+	uio->uio_soffset = uio->uio_loffset;
 	bzero(&uio->uio_dio, sizeof (zfs_uio_dio_t));
-	uio->uio_dio.orig_loffset = uio->uio_loffset;
 }
 
 static inline void
@@ -159,8 +160,8 @@ zfs_uio_bvec_init(zfs_uio_t *uio, struct bio *bio)
 	uio->uio_extflg = 0;
 	uio->uio_resid = BIO_BI_SIZE(bio);
 	uio->uio_skip = BIO_BI_SKIP(bio);
+	uio->uio_soffset = uio->uio_loffset;
 	bzero(&uio->uio_dio, sizeof (zfs_uio_dio_t));
-	uio->uio_dio.orig_loffset = uio->uio_loffset;
 }
 
 #if defined(HAVE_VFS_IOV_ITER)
@@ -177,8 +178,8 @@ zfs_uio_iov_iter_init(zfs_uio_t *uio, struct iov_iter *iter, offset_t offset,
 	uio->uio_extflg = 0;
 	uio->uio_resid = resid;
 	uio->uio_skip = skip;
+	uio->uio_soffset = uio->uio_loffset;
 	bzero(&uio->uio_dio, sizeof (zfs_uio_dio_t));
-	uio->uio_dio.orig_loffset = uio->uio_loffset;
 }
 
 static inline void
@@ -200,8 +201,8 @@ zfs_uio_iov_iter_bio_init(zfs_uio_t *uio, struct iov_iter *iter,
 	uio->uio_extflg = 0;
 	uio->uio_resid = BIO_BI_SIZE(bio);
 	uio->uio_skip = BIO_BI_SKIP(bio);
+	uio->uio_soffset = uio->uio_loffset;
 	bzero(&uio->uio_dio, sizeof (zfs_uio_dio_t));
-	uio->uio_dio.orig_loffset = uio->uio_loffset;
 }
 
 #endif /* HAVE_VFS_IOV_ITER */

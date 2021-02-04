@@ -1098,8 +1098,6 @@ dbuf_set_data(dmu_buf_impl_t *db, arc_buf_t *buf)
 	    dr_head->dt.dl.dr_override_state == DR_OVERRIDDEN &&
 	    dr_head->dt.dl.dr_data == NULL) {
 		dr_head->dt.dl.dr_data = db->db_buf;
-		zfs_dbgmsg("completed read for Direct IO write of %p, "
-		    "setting dr_data to %p", db, db->db_buf);
 	}
 
 	ASSERT(buf->b_data != NULL);

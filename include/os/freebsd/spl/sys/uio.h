@@ -50,11 +50,11 @@ typedef	enum uio_rw	zfs_uio_rw_t;
 typedef struct {
 	vm_page_t	*pages;
 	int		num_pages;
-	offset_t	orig_offset;
 } zfs_uio_dio_t;
 
 typedef struct zfs_uio {
 	struct uio	*uio;
+	offset_t	uio_soffset;
 	uint16_t	uio_extflg;
 	zfs_uio_dio_t	uio_dio;
 } zfs_uio_t;
@@ -68,6 +68,7 @@ typedef struct zfs_uio {
 #define	zfs_uio_iovbase(u, idx)	GET_UIO_STRUCT(u)->uio_iov[(idx)].iov_base
 #define	zfs_uio_td(u)		GET_UIO_STRUCT(u)->uio_td
 #define	zfs_uio_rw(u)		GET_UIO_STRUCT(u)->uio_rw
+#define	zfs_uio_soffset(u)	(u)->uio_soffset
 #define	zfs_uio_fault_disable(u, set)
 #define	zfs_uio_prefaultpages(size, u)	(0)
 
@@ -77,7 +78,7 @@ zfs_uio_init(zfs_uio_t *uio, struct uio *uio_s)
 {
 	bzero(uio, sizeof (zfs_uio_t));
 	GET_UIO_STRUCT(uio) = uio_s;
-	uio->uio_dio.orig_offset = uio_s->uio_offset;
+	uio->uio_soffset = uio_s->uio_offset;
 }
 
 static __inline void
@@ -99,8 +100,6 @@ void zfs_uioskip(zfs_uio_t *uiop, size_t n);
 int zfs_uio_fault_move(void *p, size_t n, zfs_uio_rw_t dir, zfs_uio_t *uio);
 void zfs_uio_free_dio_pages(zfs_uio_t *uio, zfs_uio_rw_t rw);
 int zfs_uio_get_dio_pages_alloc(zfs_uio_t *, zfs_uio_rw_t rw);
-void zfs_uio_dio_get_offset_pages_cnt(zfs_uio_t *uio, offset_t *offset,
-    uint_t *n_pages, size_t *start, uint64_t size);
 boolean_t zfs_uio_page_aligned(zfs_uio_t *);
 
 

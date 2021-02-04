@@ -304,11 +304,6 @@ abd_free(abd_t *abd)
 	} else if (abd_is_linear(abd)) {
 		if (abd->abd_flags & ABD_FLAG_OWNER)
 			abd_free_linear(abd);
-#if defined(_KERNEL)
-	} else if (abd_is_from_pages(abd)) {
-		if (abd->abd_flags & ABD_FLAG_OWNER)
-			abd_free_from_pages(abd);
-#endif
 	} else {
 		if (abd->abd_flags & ABD_FLAG_OWNER)
 			abd_free_scatter(abd);
@@ -536,11 +531,6 @@ abd_get_offset_impl(abd_t *abd, abd_t *sabd, size_t off, size_t size)
 			off = 0;
 		}
 		ASSERT3U(left, ==, 0);
-#if defined(_KERNEL)
-	} else if (abd_is_from_pages(sabd)) {
-		abd = abd_get_offset_from_pages(abd, sabd, off);
-		abd->abd_flags |= ABD_FLAG_FROM_PAGES;
-#endif
 	} else {
 		abd = abd_get_offset_scatter(abd, sabd, off);
 	}

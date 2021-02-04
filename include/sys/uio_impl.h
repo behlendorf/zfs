@@ -40,6 +40,7 @@
 #define	_SYS_UIO_IMPL_H
 
 #include <sys/uio.h>
+#include <sys/sysmacros.h>
 
 extern int zfs_uiomove(void *, size_t, zfs_uio_rw_t, zfs_uio_t *);
 extern int zfs_uio_prefaultpages(ssize_t, zfs_uio_t *);
@@ -47,8 +48,11 @@ extern int zfs_uiocopy(void *, size_t, zfs_uio_rw_t, zfs_uio_t *, size_t *);
 extern void zfs_uioskip(zfs_uio_t *, size_t);
 extern void zfs_uio_free_dio_pages(zfs_uio_t *, zfs_uio_rw_t);
 extern int zfs_uio_get_dio_pages_alloc(zfs_uio_t *, zfs_uio_rw_t);
-void zfs_uio_dio_get_offset_pages_cnt(zfs_uio_t *, offset_t *, uint_t *,
-    size_t *, uint64_t);
-extern boolean_t zfs_uio_page_aligned(zfs_uio_t *);
+
+static inline boolean_t
+zfs_uio_page_aligned(zfs_uio_t *uio)
+{
+	return (IO_PAGE_ALIGNED(zfs_uio_offset(uio), zfs_uio_resid(uio)));
+}
 
 #endif	/* _SYS_UIO_IMPL_H */

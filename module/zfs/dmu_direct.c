@@ -351,32 +351,33 @@ int
 dmu_rw_uio_direct(dnode_t *dn, zfs_uio_t *uio, uint64_t size,
     dmu_tx_t *tx, boolean_t read)
 {
-	abd_t *data;
+	offset_t offset = zfs_uio_offset(uio);
+	offset_t page_index = offset - zfs_uio_soffset(uio) / PAGE_SIZE;
+	unsigned long page_offset = offset % PAGE_SIZE;
 	int err;
-	offset_t pages_offset;
-	uint_t n_pages;
-	size_t start;
 
 	ASSERT(uio->uio_extflg & UIO_DIRECT);
+	ASSERT3U(uio->uio_segflg, !=, UIO_SYSSPACE);
+	ASSERT3P(uio->uio_dio.pages, !=, NULL);
+	ASSERT3S(offset, >=, zfs_uio_soffset(uio));
 
-	zfs_uio_dio_get_offset_pages_cnt(uio, &pages_offset, &n_pages,
-	    &start, size);
+	abd_t *data = abd_alloc_from_pages(&uio->uio_dio.pages[page_index],
+	    page_offset, size);
 
-	data = abd_alloc_from_pages(&uio->uio_dio.pages[pages_offset],
-	    n_pages, start);
-
-	if (read) {
-		err = dmu_read_abd(dn, zfs_uio_offset(uio), size,
-		    data, DMU_DIRECTIO);
-	} else { /* write */
-		err = dmu_write_abd(dn, zfs_uio_offset(uio), size,
-		    data, DMU_DIRECTIO, tx);
-	}
+	if (read)
+		err = dmu_read_abd(dn, offset, size, data, DMU_DIRECTIO);
+	else
+		err = dmu_write_abd(dn, offset, size, data, DMU_DIRECTIO, tx);
 
 	abd_free(data);
 
+	/*
+	 * XXX - I don't think we need to do this since we're always
+	 * using the logical offset and starting offset from the uio.
+	 */
 	if (err == 0)
 		zfs_uioskip(uio, size);
+
 	return (err);
 }
 #endif /* _KERNEL */

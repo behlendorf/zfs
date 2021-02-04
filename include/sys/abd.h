@@ -94,9 +94,9 @@ abd_t *abd_alloc_for_io(size_t, boolean_t);
 abd_t *abd_alloc_sametype(abd_t *, size_t);
 #if defined(_KERNEL)
 #if defined(__linux__)
-abd_t *abd_alloc_from_pages(struct page **, uint_t, unsigned long);
+abd_t *abd_alloc_from_pages(struct page **, unsigned long, uint64_t size);
 #elif defined(__FreeBSD__)
-abd_t *abd_alloc_from_pages(vm_page_t *, uint_t, unsigned long);
+abd_t *abd_alloc_from_pages(vm_page_t *, unsigned long, uint64_t size);
 #endif
 #endif /* _KERNEL */
 void abd_gang_add(abd_t *, abd_t *, boolean_t);

@@ -562,27 +562,4 @@ zfs_uio_get_dio_pages_alloc(zfs_uio_t *uio, zfs_uio_rw_t rw)
 }
 EXPORT_SYMBOL(zfs_uio_get_dio_pages_alloc);
 
-void
-zfs_uio_dio_get_offset_pages_cnt(zfs_uio_t *uio, offset_t *offset,
-    uint_t *n_pages, size_t *start, uint64_t size)
-{
-	ASSERT(uio->uio_segflg != UIO_SYSSPACE);
-	ASSERT3P(uio->uio_dio.pages, !=, NULL);
-	*n_pages = DIV_ROUND_UP(size, PAGE_SIZE);
-	*offset = ((uio->uio_loffset - uio->uio_dio.orig_loffset) /
-	    PAGE_SIZE);
-	*start = uio->uio_loffset % PAGE_SIZE;
-	ASSERT3S(*offset, >=, 0);
-}
-EXPORT_SYMBOL(zfs_uio_dio_get_offset_pages_cnt);
-
-boolean_t
-zfs_uio_page_aligned(zfs_uio_t *uio)
-{
-	if (IO_PAGE_ALIGNED(uio->uio_loffset, uio->uio_resid))
-		return (B_TRUE);
-	return (B_FALSE);
-}
-EXPORT_SYMBOL(zfs_uio_page_aligned);
-
 #endif /* _KERNEL */
