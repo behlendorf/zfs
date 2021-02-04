@@ -613,7 +613,7 @@ pre =
 tags = ['functional', 'inheritance']
 
 [tests/functional/io]
-tests = ['sync', 'psync', 'posixaio', 'mmap']
+tests = ['dio_recordsize', 'mmap', 'posixaio', 'psync', 'sync']
 tags = ['functional', 'io']
 
 [tests/functional/inuse]
