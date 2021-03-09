@@ -1209,9 +1209,8 @@ dmu_read_uio_dnode(dnode_t *dn, zfs_uio_t *uio, uint64_t size)
 	dmu_buf_t **dbp;
 	int numbufs, i, err;
 
-	if (uio->uio_extflg & UIO_DIRECT) {
-		return (dmu_rw_uio_direct(dn, uio,  size, NULL, B_TRUE));
-	}
+	if (uio->uio_extflg & UIO_DIRECT)
+		return (dmu_read_uio_direct(dn, uio,  size));
 
 	/*
 	 * NB: we could do this block-at-a-time, but it's nice
@@ -1310,7 +1309,7 @@ dmu_write_uio_dnode(dnode_t *dn, zfs_uio_t *uio, uint64_t size, dmu_tx_t *tx)
 		 * sized aligned. Otherwise, we pass the write off to the ARC.
 		 */
 		if (IO_ALIGNED(zfs_uio_offset(uio), size, dn->dn_datablksz))
-			return (dmu_rw_uio_direct(dn, uio, size, tx, B_FALSE));
+			return (dmu_write_uio_direct(dn, uio, size, tx));
 	}
 
 	err = dmu_buf_hold_array_by_dnode(dn, zfs_uio_offset(uio), size,
@@ -2363,9 +2362,15 @@ EXPORT_SYMBOL(dmu_free_long_range);
 EXPORT_SYMBOL(dmu_free_long_object);
 EXPORT_SYMBOL(dmu_read);
 EXPORT_SYMBOL(dmu_read_by_dnode);
+EXPORT_SYMBOL(dmu_read_uio);
+EXPORT_SYMBOL(dmu_read_uio_dbuf);
+EXPORT_SYMBOL(dmu_read_uio_dnode);
 EXPORT_SYMBOL(dmu_write);
 EXPORT_SYMBOL(dmu_write_by_dnode);
 EXPORT_SYMBOL(dmu_write_by_dnode_flags);
+EXPORT_SYMBOL(dmu_write_uio);
+EXPORT_SYMBOL(dmu_write_uio_dbuf);
+EXPORT_SYMBOL(dmu_write_uio_dnode);
 EXPORT_SYMBOL(dmu_prealloc);
 EXPORT_SYMBOL(dmu_object_info);
 EXPORT_SYMBOL(dmu_object_info_from_dnode);

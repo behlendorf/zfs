@@ -535,6 +535,5 @@ zfs_uio_get_dio_pages_alloc(zfs_uio_t *uio, zfs_uio_rw_t rw)
 
 	return (0);
 }
-EXPORT_SYMBOL(zfs_uio_get_dio_pages_alloc);
 
 #endif /* _KERNEL */
