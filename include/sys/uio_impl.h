@@ -47,6 +47,7 @@ extern int zfs_uiocopy(void *, size_t, zfs_uio_rw_t, zfs_uio_t *, size_t *);
 extern void zfs_uioskip(zfs_uio_t *, size_t);
 extern void zfs_uio_free_dio_pages(zfs_uio_t *, zfs_uio_rw_t);
 extern int zfs_uio_get_dio_pages_alloc(zfs_uio_t *, zfs_uio_rw_t);
+extern boolean_t zfs_uio_page_aligned(zfs_uio_t *);
 
 /*
  * These macros are currently only used to check alignment restrictions for
@@ -55,12 +56,6 @@ extern int zfs_uio_get_dio_pages_alloc(zfs_uio_t *, zfs_uio_rw_t);
  */
 #define	IO_ALIGNED(o, s, a)	(((o) % (a) == 0) && ((s) % (a) == 0))
 #define	IO_PAGE_ALIGNED(o, s)	IO_ALIGNED(o, s, PAGESIZE)
-
-static inline boolean_t
-zfs_uio_page_aligned(zfs_uio_t *uio)
-{
-	return (IO_PAGE_ALIGNED(zfs_uio_offset(uio), zfs_uio_resid(uio)));
-}
 
 static inline void
 zfs_uio_iov_at_index(zfs_uio_t *uio, uint_t idx, void **base, uint64_t *len)

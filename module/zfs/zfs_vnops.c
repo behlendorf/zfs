@@ -770,6 +770,12 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 		}
 	}
 
+	if (o_direct_defer) {
+		ASSERT(ioflag & O_DIRECT);
+		uio->uio_extflg |= UIO_DIRECT;
+		o_direct_defer = B_FALSE;
+	}
+
 	zfs_znode_update_vfs(zp);
 	zfs_rangelock_exit(lr);
 	zfs_uio_free_dio_pages(uio, UIO_WRITE);
