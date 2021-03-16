@@ -119,9 +119,6 @@ zfs_uio_page_aligned(zfs_uio_t *uio)
 {
 	const struct iovec *iov = GET_UIO_STRUCT(uio)->uio_iov;
 
-	if (!IO_PAGE_ALIGNED(zfs_uio_offset(uio), zfs_uio_resid(uio)))
-		return (B_FALSE);
-
 	for (int i = zfs_uio_iovcnt(uio); i > 0; iov++, i--) {
 		unsigned long addr = (unsigned long)iov->iov_base;
 		size_t size = iov->iov_len;

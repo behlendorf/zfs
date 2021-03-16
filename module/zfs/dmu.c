@@ -996,7 +996,8 @@ dmu_read_impl(dnode_t *dn, uint64_t offset, uint64_t size,
 		return (0);
 
 	/* Allow Direct IO when requested and properly aligned */
-	if ((flags & DMU_DIRECTIO) && IO_PAGE_ALIGNED(offset, size)) {
+	if ((flags & DMU_DIRECTIO) && zfs_dio_page_aligned(buf) &&
+	    zfs_dio_blksz_aligned(offset, size, SPA_MINBLOCKSIZE)) {
 		abd_t *data = abd_get_from_buf(buf, size);
 		err = dmu_read_abd(dn, offset, size, data, flags);
 		abd_free(data);
@@ -1126,8 +1127,8 @@ dmu_write_by_dnode_flags(dnode_t *dn, uint64_t offset, uint64_t size,
 		return (0);
 
 	/* Allow Direct IO when requested and properly aligned */
-	if ((flags & DMU_DIRECTIO) && IO_PAGE_ALIGNED(offset, size) &&
-	    IO_ALIGNED(offset, size, dn->dn_datablksz)) {
+	if ((flags & DMU_DIRECTIO) && zfs_dio_page_aligned((void *)buf) &&
+	    zfs_dio_blksz_aligned(offset, size, dn->dn_datablksz)) {
 		abd_t *data = abd_get_from_buf((void *)buf, size);
 		error = dmu_write_abd(dn, offset, size, data, DMU_DIRECTIO, tx);
 		abd_free(data);
@@ -1307,8 +1308,8 @@ dmu_write_uio_dnode(dnode_t *dn, zfs_uio_t *uio, uint64_t size, dmu_tx_t *tx)
 	 * We only allow Direct IO writes to happen if we are block
 	 * sized aligned. Otherwise, we pass the write off to the ARC.
 	 */
-	if ((uio->uio_extflg & UIO_DIRECT) &&
-	    IO_ALIGNED(zfs_uio_offset(uio), size, dn->dn_datablksz)) {
+	if ((uio->uio_extflg & UIO_DIRECT) && zfs_dio_blksz_aligned(
+	    zfs_uio_offset(uio), size, dn->dn_datablksz)) {
 		return (dmu_write_uio_direct(dn, uio, size, tx));
 	}
 
@@ -1491,8 +1492,8 @@ dmu_assign_arcbuf_by_dnode(dnode_t *dn, uint64_t offset, arc_buf_t *buf,
 		 * The data abd will be freed by dmu_write_direct_done().
 		 * Otherwise assign the loaned arc_buf_t to the dbuf.
 		 */
-		if ((flags & DMU_DIRECTIO) && IO_PAGE_ALIGNED(offset, blksz) &&
-		    IO_ALIGNED(offset, blksz, dn->dn_datablksz)) {
+		if ((flags & DMU_DIRECTIO) && zfs_dio_page_aligned(buf) &&
+		    zfs_dio_blksz_aligned(offset, blksz, dn->dn_datablksz)) {
 			abd_t *data = abd_get_from_buf(buf->b_data, blksz);
 			int error = dmu_write_direct(NULL, db, data, tx);
 

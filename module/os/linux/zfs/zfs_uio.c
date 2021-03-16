@@ -338,9 +338,6 @@ EXPORT_SYMBOL(zfs_uioskip);
 boolean_t
 zfs_uio_page_aligned(zfs_uio_t *uio)
 {
-	if (!IO_PAGE_ALIGNED(zfs_uio_offset(uio), zfs_uio_resid(uio)))
-		return (B_FALSE);
-
 	if (uio->uio_segflg == UIO_BVEC) {
 		/* Currently unsupported */
 		return (B_FALSE);
