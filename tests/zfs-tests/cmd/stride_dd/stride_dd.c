@@ -21,7 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static int alignment = 4096;
+static int alignment = 0;
 static int bsize = 0;
 static int count = 0;
 static char *ifile = NULL;
@@ -62,7 +62,7 @@ usage(void)
 	    "    seekblocks:  Number of blocks to skip at start of output\n"
 	    "    sseekbytes:  Treat seekblocks as byte count\n"
 	    "    alignment:   Alignment passed to posix_memalign() (default "
-	    " 4096)\n"
+	    " PAGE_SIZE)\n"
 	    "    if_o_direct: Use O_DIRECT with inputfile (default no O_DIRECT)"
 	    "\n"
 	    "    of_o_direct: Use O_DIRECT with outputfile (default no "
@@ -98,6 +98,7 @@ parse_options(int argc, char *argv[])
 	int errflag = 0;
 
 	execname = argv[0];
+	alignment = sysconf(_SC_PAGE_SIZE);
 
 	extern char *optarg;
 	extern int optind, optopt;
