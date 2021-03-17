@@ -343,14 +343,14 @@ int
 dmu_read_uio_direct(dnode_t *dn, zfs_uio_t *uio, uint64_t size)
 {
 	offset_t offset = zfs_uio_offset(uio);
-	offset_t page_index = (offset - zfs_uio_soffset(uio)) / PAGESIZE;
+	offset_t page_index = (offset - zfs_uio_soffset(uio)) >> PAGESHIFT;
 	int err;
 
 	ASSERT(uio->uio_extflg & UIO_DIRECT);
 	ASSERT3U(page_index, <, uio->uio_dio.npages);
 
 	abd_t *data = abd_alloc_from_pages(&uio->uio_dio.pages[page_index],
-	    offset % PAGESIZE, size);
+	    offset & (PAGESIZE - 1), size);
 	err = dmu_read_abd(dn, offset, size, data, DMU_DIRECTIO);
 	abd_free(data);
 
@@ -364,14 +364,14 @@ int
 dmu_write_uio_direct(dnode_t *dn, zfs_uio_t *uio, uint64_t size, dmu_tx_t *tx)
 {
 	offset_t offset = zfs_uio_offset(uio);
-	offset_t page_index = (offset - zfs_uio_soffset(uio)) / PAGESIZE;
+	offset_t page_index = (offset - zfs_uio_soffset(uio)) >> PAGESHIFT;
 	int err;
 
 	ASSERT(uio->uio_extflg & UIO_DIRECT);
 	ASSERT3U(page_index, <, uio->uio_dio.npages);
 
 	abd_t *data = abd_alloc_from_pages(&uio->uio_dio.pages[page_index],
-	    offset % PAGESIZE, size);
+	    offset & (PAGESIZE - 1), size);
 	err = dmu_write_abd(dn, offset, size, data, DMU_DIRECTIO, tx);
 	abd_free(data);
 
