@@ -60,7 +60,7 @@ usage(void)
 	    "    stride:      Read/write a block then skip (stride - 1) blocks"
 	    "\n"
 	    "    seekblocks:  Number of blocks to skip at start of output\n"
-	    "    sseekbytes:  Treat seekblocks as byte count\n"
+	    "    seekbytes:   Treat seekblocks as byte count\n"
 	    "    alignment:   Alignment passed to posix_memalign() (default "
 	    " PAGE_SIZE)\n"
 	    "    if_o_direct: Use O_DIRECT with inputfile (default no O_DIRECT)"

@@ -100,13 +100,13 @@ log_must rm -f $tmp_file
 log_must zfs set direct=disabled $TESTPOOL/$TESTFS
 
 log_note "Aligned writes (all buffered with an extra for create)"
-check_write $TESTPOOL $tmp_file $rs $count 0 "direct" $count 0
+check_write $TESTPOOL $tmp_file $rs $count 0 "-D" $count 0
 
 log_note "Aligned overwrites"
-check_write $TESTPOOL $tmp_file $rs $count 0 "direct" $count 0
+check_write $TESTPOOL $tmp_file $rs $count 0 "-D" $count 0
 
 log_note "Aligned reads (all ARC hits)"
-check_read $TESTPOOL $tmp_file $rs $count 0 "direct" 0 0
+check_read $TESTPOOL $tmp_file $rs $count 0 "-d" 0 0
 
 log_must rm -f $tmp_file
 
@@ -118,12 +118,12 @@ log_must zfs set direct=standard $TESTPOOL/$TESTFS
 
 log_note "Aligned writes/overwrites (buffered / direct)"
 check_write $TESTPOOL $tmp_file $rs $count 0 "" $count 0
-check_write $TESTPOOL $tmp_file $rs $count 0 "direct" 0 $count
+check_write $TESTPOOL $tmp_file $rs $count 0 "-D" 0 $count
 
 log_note "Aligned reads (buffered / direct)"
 evict_blocks $TESTPOOL $tmp_file $file_size
 check_read $TESTPOOL $tmp_file $rs $count 0 "" $count 0
 evict_blocks $TESTPOOL $tmp_file $file_size
-check_read $TESTPOOL $tmp_file $rs $count 0 "direct" 0 $count
+check_read $TESTPOOL $tmp_file $rs $count 0 "-d" 0 $count
 
 log_pass "Verify the direct=always|disabled|standard property"

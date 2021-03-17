@@ -59,7 +59,7 @@ size=$((bs * blocks))
 runtime=10
 page_size=$(getconf PAGESIZE)
 
-log_must dd if=/dev/zero of=$tmp_file bs=$bs count=$blocks
+log_must stride_dd -i /dev/zero -o $tmp_file -b $bs -c $blocks
 
 # Direct random read/write page-aligned IO of varying sizes with
 # occasional calls to fsync(2), mixed with...

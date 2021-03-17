@@ -56,7 +56,7 @@ blocks=32
 size=$((bs * blocks))
 runtime=10
 
-log_must dd if=/dev/zero of=$tmp_file bs=$bs count=$blocks
+log_must stride_dd -i /dev/zero -o $tmp_file -b $bs -c $blocks
 
 # Direct IO writes
 log_must eval "fio --filename=$tmp_file --name=direct-write \

@@ -61,63 +61,59 @@ log_must zfs set recordsize=128k $TESTPOOL/$TESTFS
 tmp_file=$mntpnt/tmp_file
 file_size=$((rs * 8))
 
-log_must dd if=/dev/urandom of=$tmp_file bs=$file_size count=1
+log_must stride_dd -i /dev/urandom -o $tmp_file -b $file_size -c 1
 
 # N recordsize aligned writes which do not span blocks
-check_write $TESTPOOL $tmp_file $rs 1 0 direct 0 1
-check_write $TESTPOOL $tmp_file $rs 2 0 direct 0 2
-check_write $TESTPOOL $tmp_file $rs 4 0 direct 0 4
-check_write $TESTPOOL $tmp_file $rs 8 0 direct 0 8
+check_write $TESTPOOL $tmp_file $rs 1 0 "-D" 0 1
+check_write $TESTPOOL $tmp_file $rs 2 0 "-D" 0 2
+check_write $TESTPOOL $tmp_file $rs 4 0 "-D" 0 4
+check_write $TESTPOOL $tmp_file $rs 8 0 "-D" 0 8
 
 # 1 recordsize aligned write which spans multiple blocks at various offsets
-check_write $TESTPOOL $tmp_file $((rs * 2)) 1 0 direct 0 2
-check_write $TESTPOOL $tmp_file $((rs * 2)) 1 1 direct 0 2
-check_write $TESTPOOL $tmp_file $((rs * 2)) 1 2 direct 0 2
-check_write $TESTPOOL $tmp_file $((rs * 2)) 1 3 direct 0 2
-check_write $TESTPOOL $tmp_file $((rs * 4)) 1 0 direct 0 4
-check_write $TESTPOOL $tmp_file $((rs * 4)) 1 1 direct 0 4
-check_write $TESTPOOL $tmp_file $((rs * 8)) 1 0 direct 0 8
+check_write $TESTPOOL $tmp_file $((rs * 2)) 1 0 "-D" 0 2
+check_write $TESTPOOL $tmp_file $((rs * 2)) 1 1 "-D" 0 2
+check_write $TESTPOOL $tmp_file $((rs * 2)) 1 2 "-D" 0 2
+check_write $TESTPOOL $tmp_file $((rs * 2)) 1 3 "-D" 0 2
+check_write $TESTPOOL $tmp_file $((rs * 4)) 1 0 "-D" 0 4
+check_write $TESTPOOL $tmp_file $((rs * 4)) 1 1 "-D" 0 4
+check_write $TESTPOOL $tmp_file $((rs * 8)) 1 0 "-D" 0 8
 
 # sub-blocksize unaligned writes which do not span blocks.
-check_write $TESTPOOL $tmp_file $((rs / 2)) 1 0 direct 1 0
-check_write $TESTPOOL $tmp_file $((rs / 2)) 1 1 direct 1 0
-check_write $TESTPOOL $tmp_file $((rs / 2)) 1 2 direct 1 0
-check_write $TESTPOOL $tmp_file $((rs / 2)) 1 3 direct 1 0
+check_write $TESTPOOL $tmp_file $((rs / 2)) 1 0 "-D" 1 0
+check_write $TESTPOOL $tmp_file $((rs / 2)) 1 1 "-D" 1 0
+check_write $TESTPOOL $tmp_file $((rs / 2)) 1 2 "-D" 1 0
+check_write $TESTPOOL $tmp_file $((rs / 2)) 1 3 "-D" 1 0
 
 # large unaligned writes which span multiple blocks
-check_write $TESTPOOL $tmp_file $((rs * 2)) 1 $((rs / 2)) \
-    direct,seek_bytes 2 1
-check_write $TESTPOOL $tmp_file $((rs * 4)) 2 $((rs / 4)) \
-    direct,seek_bytes 4 6
+check_write $TESTPOOL $tmp_file $((rs * 2)) 1 $((rs / 2)) "-D -K" 2 1
+check_write $TESTPOOL $tmp_file $((rs * 4)) 2 $((rs / 4)) "-D -K" 4 6
 
 # evict any cached blocks by overwriting with O_DIRECT
 evict_blocks $TESTPOOL $tmp_file $file_size
 
 # recordsize aligned reads which do not span blocks
-check_read $TESTPOOL $tmp_file $rs 1 0 direct 0 1
-check_read $TESTPOOL $tmp_file $rs 2 0 direct 0 2
-check_read $TESTPOOL $tmp_file $rs 4 0 direct 0 4
-check_read $TESTPOOL $tmp_file $rs 8 0 direct 0 8
+check_read $TESTPOOL $tmp_file $rs 1 0 "-d" 0 1
+check_read $TESTPOOL $tmp_file $rs 2 0 "-d" 0 2
+check_read $TESTPOOL $tmp_file $rs 4 0 "-d" 0 4
+check_read $TESTPOOL $tmp_file $rs 8 0 "-d" 0 8
 
 # 1 recordsize aligned read which spans multiple blocks at various offsets
-check_read $TESTPOOL $tmp_file $((rs * 2)) 1 0 direct 0 2
-check_read $TESTPOOL $tmp_file $((rs * 2)) 1 1 direct 0 2
-check_read $TESTPOOL $tmp_file $((rs * 2)) 1 2 direct 0 2
-check_read $TESTPOOL $tmp_file $((rs * 2)) 1 3 direct 0 2
-check_read $TESTPOOL $tmp_file $((rs * 4)) 1 0 direct 0 4
-check_read $TESTPOOL $tmp_file $((rs * 4)) 1 1 direct 0 4
-check_read $TESTPOOL $tmp_file $((rs * 8)) 1 0 direct 0 8
+check_read $TESTPOOL $tmp_file $((rs * 2)) 1 0 "-d" 0 2
+check_read $TESTPOOL $tmp_file $((rs * 2)) 1 1 "-d" 0 2
+check_read $TESTPOOL $tmp_file $((rs * 2)) 1 2 "-d" 0 2
+check_read $TESTPOOL $tmp_file $((rs * 2)) 1 3 "-d" 0 2
+check_read $TESTPOOL $tmp_file $((rs * 4)) 1 0 "-d" 0 4
+check_read $TESTPOOL $tmp_file $((rs * 4)) 1 1 "-d" 0 4
+check_read $TESTPOOL $tmp_file $((rs * 8)) 1 0 "-d" 0 8
 
 # sub-blocksize unaligned reads which do not span blocks.
-check_read $TESTPOOL $tmp_file $((rs / 2)) 1 0 direct 0 1
-check_read $TESTPOOL $tmp_file $((rs / 2)) 1 1 direct 0 1
-check_read $TESTPOOL $tmp_file $((rs / 2)) 1 2 direct 0 1
-check_read $TESTPOOL $tmp_file $((rs / 2)) 1 3 direct 0 1
+check_read $TESTPOOL $tmp_file $((rs / 2)) 1 0 "-d" 0 1
+check_read $TESTPOOL $tmp_file $((rs / 2)) 1 1 "-d" 0 1
+check_read $TESTPOOL $tmp_file $((rs / 2)) 1 2 "-d" 0 1
+check_read $TESTPOOL $tmp_file $((rs / 2)) 1 3 "-d" 0 1
 
 # large unaligned reads which span multiple blocks
-check_read $TESTPOOL $tmp_file $((rs * 2)) 1 $((rs / 2)) \
-    direct,skip_bytes 0 3
-check_read $TESTPOOL $tmp_file $((rs * 4)) 1 $((rs / 4)) \
-    direct,skip_bytes 0 5
+check_read $TESTPOOL $tmp_file $((rs * 2)) 1 $((rs / 2)) "-d -P" 0 3
+check_read $TESTPOOL $tmp_file $((rs * 4)) 1 $((rs / 4)) "-d -P" 0 5
 
 log_pass "Verify the number direct/buffered requests for (un)aligned access"

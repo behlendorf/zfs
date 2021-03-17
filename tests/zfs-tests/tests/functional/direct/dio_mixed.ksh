@@ -56,7 +56,7 @@ tmp_file=$mntpnt/tmp_file
 page_size=$(getconf PAGESIZE)
 file_size=1048576
 
-log_must dd if=/dev/urandom of=$src_file bs=$file_size count=1
+log_must stride_dd -i /dev/urandom -o $src_file -b $file_size -c 1
 
 #
 # Using mixed input and output block sizes verify that buffered and
@@ -71,32 +71,34 @@ for ibs in "512" "$page_size" "131072"; do
 
 		# Only allow direct IO when it is at least page sized.
 		if [[ $ibs -ge $page_size ]]; then
-			iflags="iflag=direct"
+			iflags="-d"
 		fi
 
 		if [[ $obs -ge $page_size ]]; then
-			oflags="oflag=direct"
+			oflags="-D"
 		fi
 
 		# Verify buffered write followed by a direct read.
-		log_must dd if=$src_file of=$new_file bs=$obs count=$oblocks
-		log_must dd if=$new_file of=$tmp_file bs=$ibs count=$iblocks \
-		    $iflags
+		log_must stride_dd -i $src_file -o $new_file -b $obs \
+		    -c $oblocks
+		log_must stride_dd -i $new_file -o $tmp_file -b $ibs \
+		    -c $iblocks $iflags
 		log_must cmp_md5s $new_file $tmp_file
 		log_must rm -f $new_file $tmp_file
 
 		# Verify direct write followed by a buffered read.
-		log_must dd if=$src_file of=$new_file bs=$obs count=$oblocks \
-		    $oflags
-		log_must dd if=$new_file of=$tmp_file bs=$ibs count=$iblocks
+		log_must stride_dd -i $src_file -o $new_file -b $obs \
+		    -c $oblocks $oflags
+		log_must stride_dd -i $new_file -o $tmp_file -b $ibs \
+		    -c $iblocks
 		log_must cmp_md5s $new_file $tmp_file
 		log_must rm -f $new_file $tmp_file
 
 		# Verify direct write followed by a direct read.
-		log_must dd if=$src_file of=$new_file bs=$obs count=$oblocks \
-		    $oflags
-		log_must dd if=$new_file of=$tmp_file bs=$ibs count=$iblocks \
-		    $iflags
+		log_must stride_dd -i $src_file -o $new_file -b $obs \
+		    -c $oblocks $oflags
+		log_must stride_dd -i $new_file -o $tmp_file -b $ibs \
+		    -c $iblocks $iflags
 		log_must cmp_md5s $new_file $tmp_file
 		log_must rm -f $new_file $tmp_file
 	done

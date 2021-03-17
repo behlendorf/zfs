@@ -58,22 +58,21 @@ log_must zfs set recordsize=128k $TESTPOOL/$TESTFS
 tmp_file=$mntpnt/tmp_file
 file_size=$((rs * 8))
 
-dd if=/dev/urandom of=$tmp_file bs=$file_size count=1
+log_must stride_dd -i /dev/urandom -o $tmp_file -b $file_size -c 1
 
 log_must zfs set direct=standard $TESTPOOL/$TESTFS
 # sub-pagesize direct writes/read will always fail if direct=standard.
-log_mustnot dd if=/dev/urandom of=$tmp_file bs=512 count=8 oflag=direct \
-    conv=notrunc
-log_mustnot dd if=$tmp_file of=/dev/null bs=512 count=8 iflag=direct
+log_mustnot stride_dd -i /dev/urandom -o $tmp_file -b 512 -c 8 -D
+log_mustnot stride_dd -i $tmp_file -o /dev/null -b 512 -c 8 -d
 
 logt_must zfs set direct=always $TESTPOOL/$TESTFS
 # sub-pagesize direct writes/read will always pass if direct=always.
-log_must dd if=/dev/urandom of=$tmp_file bs=512 count=8
-log_must dd if=$tmp_file of=/dev/null bs=512 count=8
+log_must stride_dd -i /dev/urandom -o $tmp_file -b 512 -c 8
+log_must stride_dd -i $tmp_file -o /dev/null -b 512 -c 8
 
 log_must zfs set direct=disabled $TESTPOOL/$TESTFS
 # sub-pagesize direct writes/read will always pass if direct=disabled.
-log_must dd if=/dev/urandom of=$tmp_file bs=512 count=8 oflag=direct
-log_must dd if=$tmp_file of=/dev/null bs=512 count=8 iflag=direct
+log_must stride_dd -i /dev/urandom -o $tmp_file -b 512 -c 8 -D
+log_must stride_dd -i $tmp_file -o /dev/null -b 512 -c 8 -d
 
 log_pass "Verify direct requests for (un)aligned access"
