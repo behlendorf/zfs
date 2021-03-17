@@ -584,9 +584,10 @@ tests = ['zfs_allow_001_pos', 'zfs_allow_002_pos', 'zfs_allow_003_pos',
 tags = ['functional', 'delegate']
 
 [tests/functional/direct]
-tests = ['dio_async_always', 'dio_compression', 'dio_dedup',
-    'dio_encryption', 'dio_mixed', 'dio_mmap', 'dio_random',
-    'dio_recordsize', 'dio_unaligned_block']
+tests = ['dio_aligned_block', 'dio_async_always', 'dio_compression',
+    'dio_dedup', 'dio_encryption', 'dio_grow_block', 'dio_mixed',
+    'dio_mmap', 'dio_property', 'dio_random', 'dio_recordsize',
+    'dio_unaligned_block']
 tags = ['functional', 'direct']
 
 [tests/functional/exec]

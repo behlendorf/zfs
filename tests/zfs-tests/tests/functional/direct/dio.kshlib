@@ -55,15 +55,21 @@ function dio_and_verify # mode file-size block-size directory extra-args
 }
 
 #
-# Get the value of a counter from the /proc/spl/kstat/zfs/$pool/iostats file.
+# Get the value of a counter from
+# Linux: /proc/spl/kstat/zfs/$pool/iostats file.
+# FreeBSD: kstat.zfs.$pool.msic.iostats.$stat
 #
 function get_iostats_stat # pool stat
 {
 	typeset pool=$1
 	typeset stat=$2
 
-	iostats_file=/proc/spl/kstat/zfs/$pool/iostats
-	val=$(grep -m1 "$stat" $iostats_file | awk '{ print $3 }')
+	if is_linux; then
+		iostats_file=/proc/spl/kstat/zfs/$pool/iostats
+		val=$(grep -m1 "$stat" $iostats_file | awk '{ print $3 }')
+	else
+		val=$(sysctl -n kstat.zfs.$pool.misc.iostats.$stat)
+	fi
 	if [[ -z "$val" ]]; then
 		log_fail "Unable to read $stat counter"
 	fi

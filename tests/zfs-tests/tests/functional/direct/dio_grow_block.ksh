@@ -37,10 +37,6 @@
 
 verify_runnable "global"
 
-if is_freebsd; then
-	log_unsupported "Requires /proc/spl/kstat/zfs/*/iostats file"
-fi
-
 function cleanup
 {
 	zfs set recordsize=$rs $TESTPOOL/$TESTFS
