@@ -26,7 +26,7 @@ static int bsize = 0;
 static int count = 0;
 static char *ifile = NULL;
 static char *ofile = NULL;
-static int stride = 0;
+static int stride = 1;
 static int seek = 0;
 static int seekbytes = 0;
 static int if_o_direct = 0;
@@ -43,7 +43,7 @@ usage(void)
 {
 	(void) fprintf(stderr,
 	    "usage: %s -i inputfile -o outputfile -b blocksize -c count \n"
-	    "           -s stride [-k seekblocks] [-K seekbytes]\n"
+	    "           [-s stride] [-k seekblocks] [-K seekbytes]\n"
 	    "           [-a alignment] [-d if_o_direct] [-D of_o_direct]\n"
 	    "           [-p skipblocks] [-P skipbytes]\n"
 	    "\n"
