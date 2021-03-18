@@ -365,6 +365,30 @@ zfs_uio_page_aligned(zfs_uio_t *uio)
 static void
 zfs_uio_set_pages_to_stable(zfs_uio_t *uio)
 {
+	int wb = 0;
+	int dirty = 0;
+
+	for (int i = 0; i < uio->uio_dio.npages; i++) {
+		struct page *p = uio->uio_dio.pages[i];
+		lock_page(p);
+
+		if (PageWriteback(p))
+			wb++;
+
+		if (PageDirty(p))
+			dirty++;
+
+		unlock_page(p);
+	}
+
+	if (wb > 0) {
+		zfs_dbgmsg("writeback=%d dirty=%d uio=%p npages=%llu "
+		    "soffset=%llu offset=%llu resid=%llu",
+		    wb, dirty, uio, uio->uio_dio.npages, zfs_uio_soffset(uio),
+		    zfs_uio_offset(uio), zfs_uio_resid(uio));
+	}
+
+#if 0
 	/*
 	 * In order to make the pages stable, we need to lock each page and
 	 * check the PG_writeback bit. If the page is under writeback, we
@@ -377,26 +401,48 @@ zfs_uio_set_pages_to_stable(zfs_uio_t *uio)
 		ASSERT3P(p, !=, NULL);
 		lock_page(p);
 
+		int j = 0, dirty = 0;
 		while (PageWriteback(p)) {
+			if (dirty == 0 && PageDirty(p)) {
+				zfs_dbgmsg("WB page=%p i=%d uio=%p npages=%llu "
+				    "soffset=%llu offset=%llu resid=%llu "
+				    "E=%d W=%d R=%d U=%d D=%d",
+				    p, i, uio, uio->uio_dio.npages, zfs_uio_soffset(uio),
+				    zfs_uio_offset(uio), zfs_uio_resid(uio),
+				    PageError(p), PageWriteback(p), PageReferenced(p),
+				    PageUptodate(p), PageDirty(p));
+				dirty = 1;
+			}
+
 			unlock_page(p);
 			wait_on_page_bit(p, PG_writeback);
 			lock_page(p);
+			j++;
 		}
 
-		TestSetPageWriteback(p);
+		zfs_dbgmsg("Set writepage page=%p", p);
+		set_page_writeback(p);
 		unlock_page(p);
 	}
+#endif
 }
 
 static void
 zfs_uio_release_stable_pages(zfs_uio_t *uio)
 {
+#if 0
+	zfs_dbgmsg("uio=%p npages=%llu soffset=%llu offset=%llu resid=%llu",
+	    uio, uio->uio_dio.npages, zfs_uio_soffset(uio),
+	    zfs_uio_offset(uio), zfs_uio_resid(uio));
+
 	ASSERT3P(uio->uio_dio.pages, !=, NULL);
 	for (int i = 0; i < uio->uio_dio.npages; i++) {
 		struct page *p = uio->uio_dio.pages[i];
 		ASSERT3P(p, !=, NULL);
 		end_page_writeback(p);
+		zfs_dbgmsg("End writepage page=%p", p);
 	}
+#endif
 }
 
 void

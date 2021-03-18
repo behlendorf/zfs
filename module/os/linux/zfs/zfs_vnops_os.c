@@ -3435,6 +3435,8 @@ zfs_putpage_commit_cb(void *arg)
 {
 	struct page *pp = arg;
 
+	zfs_dbgmsg("Clear writeback page=%p", pp);
+
 	ClearPageError(pp);
 	end_page_writeback(pp);
 }
@@ -3544,6 +3546,7 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 		unlock_page(pp);
 		zfs_rangelock_exit(lr);
 		ZFS_EXIT(zfsvfs);
+		zfs_dbgmsg("Mapping changed page=%p", pp);
 		return (0);
 	}
 
@@ -3558,6 +3561,7 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 		}
 
 		ZFS_EXIT(zfsvfs);
+		zfs_dbgmsg("Racing writeback page=%p", pp);
 		return (0);
 	}
 
@@ -3566,6 +3570,7 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 		unlock_page(pp);
 		zfs_rangelock_exit(lr);
 		ZFS_EXIT(zfsvfs);
+		zfs_dbgmsg("Not dirty page=%p", pp);
 		return (0);
 	}
 
@@ -3575,6 +3580,7 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 	 */
 	wbc->pages_skipped--;
 	set_page_writeback(pp);
+	zfs_dbgmsg("Set writeback page=%p", pp);
 	unlock_page(pp);
 
 	tx = dmu_tx_create(zfsvfs->z_os);
@@ -3593,6 +3599,7 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc)
 		end_page_writeback(pp);
 		zfs_rangelock_exit(lr);
 		ZFS_EXIT(zfsvfs);
+		zfs_dbgmsg("Set writeback page=%p error=%d", pp, err);
 		return (err);
 	}
 
