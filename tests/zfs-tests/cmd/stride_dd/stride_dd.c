@@ -244,11 +244,6 @@ main(int argc, char *argv[])
 	for (i = 0; i < count; i++) {
 		c = read(ifd, buf, bsize);
 		if (c != bsize) {
-
-			perror("read");
-			exit(2);
-		}
-		if (c != bsize) {
 			if (c < 0) {
 				perror("read");
 			} else {
