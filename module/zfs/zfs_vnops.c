@@ -448,6 +448,12 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 		return (SET_ERROR(EFAULT));
 	}
 
+	error = zfs_setup_direct(zp, uio, UIO_WRITE, &ioflag);
+	if (error) {
+		ZFS_EXIT(zfsvfs);
+		return (error);
+	}
+
 	/*
 	 * If in append mode, set the io offset pointer to eof.
 	 */
@@ -479,6 +485,7 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 
 	if (zn_rlimit_fsize(zp, uio)) {
 		zfs_rangelock_exit(lr);
+		zfs_uio_free_dio_pages(uio, UIO_WRITE);
 		ZFS_EXIT(zfsvfs);
 		return (SET_ERROR(EFBIG));
 	}
@@ -487,15 +494,9 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 
 	if (woff >= limit) {
 		zfs_rangelock_exit(lr);
+		zfs_uio_free_dio_pages(uio, UIO_WRITE);
 		ZFS_EXIT(zfsvfs);
 		return (SET_ERROR(EFBIG));
-	}
-
-	error = zfs_setup_direct(zp, uio, UIO_WRITE, &ioflag);
-	if (error) {
-		zfs_rangelock_exit(lr);
-		ZFS_EXIT(zfsvfs);
-		return (error);
 	}
 
 	if (n > limit - woff)
