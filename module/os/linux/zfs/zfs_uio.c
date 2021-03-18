@@ -332,8 +332,7 @@ zfs_uioskip(zfs_uio_t *uio, size_t n)
 EXPORT_SYMBOL(zfs_uioskip);
 
 /*
- * Check if the uio is both logically page-aligned in terms of offset
- * and length in the file, and page-aligned in memory.
+ * Check if the uio is page-aligned in memory.
  */
 boolean_t
 zfs_uio_page_aligned(zfs_uio_t *uio)

@@ -111,8 +111,7 @@ zfs_uio_fault_move(void *p, size_t n, zfs_uio_rw_t dir, zfs_uio_t *uio)
 }
 
 /*
- * Check if the uio is both logically page-aligned in terms of offset
- * and length in the file, and page-aligned in memory.
+ * Check if the uio is page-aligned in memory.
  */
 boolean_t
 zfs_uio_page_aligned(zfs_uio_t *uio)

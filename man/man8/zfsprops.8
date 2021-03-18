@@ -1032,8 +1032,8 @@ redirected through the ARC.
 For read requests there is no
 .Sy recordsize
 alignment restriction on either the starting offset or size.
-All direct requests must use a page-aligned memory buffer or an error is
-returned.
+All direct requests must use a page-aligned memory buffer and the request
+size must be a multiple of the page size or an error is returned.
 .Pp
 Concurrently mixing buffered and direct requests to overlapping regions of
 a file can decrease performance.
