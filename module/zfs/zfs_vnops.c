@@ -202,8 +202,10 @@ zfs_setup_direct(struct znode *zp, zfs_uio_t *uio, zfs_uio_rw_t rw,
 			return (SET_ERROR(EINVAL));
 		}
 
-		if (zn_has_cached_data(zp))
+		if (zn_has_cached_data(zp, zfs_uio_offset(uio),
+		    zfs_uio_offset(uio) + zfs_uio_resid(uio) - 1)) {
 			ioflag &= ~O_DIRECT;
+		}
 
 		if (ioflag & O_DIRECT) {
 			int error = zfs_uio_get_dio_pages_alloc(uio, rw);
@@ -330,7 +332,9 @@ zfs_read(struct znode *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 			error = mappedread_sf(zp, nbytes, uio);
 		else
 #endif
-		if (zn_has_cached_data(zp) && !(uio->uio_extflg & UIO_DIRECT)) {
+		if (zn_has_cached_data(zp, zfs_uio_offset(uio),
+		    zfs_uio_offset(uio) + nbytes - 1) &&
+		    !(uio->uio_extflg & UIO_DIRECT)) {
 			error = mappedread(zp, nbytes, uio);
 		} else {
 			error = dmu_read_uio_dbuf(sa_get_db(zp->z_sa_hdl),
@@ -687,7 +691,8 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 			zfs_uioskip(uio, nbytes);
 			tx_bytes = nbytes;
 		}
-		if (tx_bytes && zn_has_cached_data(zp) &&
+		if (tx_bytes &&
+		    zn_has_cached_data(zp, woff, woff + tx_bytes - 1) &&
 		    !(uio->uio_extflg & UIO_DIRECT)) {
 			update_pages(zp, woff, tx_bytes, zfsvfs->z_os);
 		}

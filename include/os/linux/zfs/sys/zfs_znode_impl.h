@@ -70,7 +70,8 @@ extern "C" {
 #define	Z_ISDEV(type)	(S_ISCHR(type) || S_ISBLK(type) || S_ISFIFO(type))
 #define	Z_ISDIR(type)	S_ISDIR(type)
 
-#define	zn_has_cached_data(zp)		((zp)->z_is_mapped)
+#define	zn_has_cached_data(zp, start, end) \
+    filemap_range_has_page(ZTOI(zp)->i_mapping, start, end)
 #define	zn_rlimit_fsize(zp, uio)	(0)
 
 /*
