@@ -711,6 +711,12 @@ zpl_writepage(struct page *pp, struct writeback_control *wbc)
 	return (zpl_putpage(pp, wbc, pp->mapping));
 }
 
+static int
+zpl_set_page_dirty(struct page *pp)
+{
+	return (__set_page_dirty_nobuffers(pp));
+}
+
 /*
  * The flag combination which matches the behavior of zfs_space() is
  * FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE.  The FALLOC_FL_PUNCH_HOLE
@@ -1009,6 +1015,7 @@ const struct address_space_operations zpl_address_space_operations = {
 	.readpage	= zpl_readpage,
 	.writepage	= zpl_writepage,
 	.writepages	= zpl_writepages,
+	.set_page_dirty	= zpl_set_page_dirty,
 	.direct_IO	= zpl_direct_IO,
 };
 
