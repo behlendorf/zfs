@@ -1646,6 +1646,30 @@ dnode_try_claim(objset_t *os, uint64_t object, int slots)
 	    slots, NULL, NULL));
 }
 
+/*
+ * Checks if the dnode contains any uncommitted dirty records.
+ */
+boolean_t
+dnode_is_dirty(dnode_t *dn)
+{
+	multilist_t *dirtylist;
+	multilist_sublist_t *mls;
+
+	for (int i = 0; i < TXG_SIZE; i++) {
+		dirtylist = dn->dn_objset->os_dirty_dnodes[i];
+		mls = multilist_sublist_lock_obj(dirtylist, dn);
+
+		if (multilist_link_active(&dn->dn_dirty_link[i])) {
+			multilist_sublist_unlock(mls);
+			return (B_TRUE);
+		}
+
+		multilist_sublist_unlock(mls);
+	}
+
+	return (B_FALSE);
+}
+
 void
 dnode_setdirty(dnode_t *dn, dmu_tx_t *tx)
 {
