@@ -213,7 +213,7 @@ log_must ls_xattr /$TESTPOOL/$TESTFS/xattr.dir
 log_must ls_xattr /$TESTPOOL/$TESTFS/xattr.file
 
 log_note "Verify working set diff:"
-log_must directory_diff $TESTDIR/copy /$TESTPOOL/$TESTFS
+log_must directory_diff $TESTDIR/copy /$TESTPOOL/$TESTFS 1
 
 log_note "Verify file checksum:"
 typeset checksum1=$(sha256digest /$TESTPOOL/$TESTFS/payload)

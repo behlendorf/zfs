@@ -132,6 +132,6 @@ log_note "Verify number of files"
 log_must test "$(ls /$TESTPOOL/$TESTFS/dir0 | wc -l)" -eq $NFILES
 
 log_note "Verify working set diff:"
-log_must directory_diff $TESTDIR/copy /$TESTPOOL/$TESTFS
+log_must directory_diff $TESTDIR/copy /$TESTPOOL/$TESTFS 1
 
 log_pass "Replay of intent log succeeds."

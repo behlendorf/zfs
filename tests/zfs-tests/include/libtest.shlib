@@ -4280,11 +4280,20 @@ function wait_for_children #children
 #
 function directory_diff # dir_a dir_b
 {
-	# Run rsync with --dry-run --itemize-changes to get something akin to diff
-	# output, but rsync is far more thorough in detecting differences (diff
-	# doesn't compare file metadata, and cannot handle special files).
-	diff="$(rsync -ni -acAHX --delete "$1/" "$2/")"
+	typeset ignore_mtime=${3:-0}
+
+	# Run rsync with --dry-run --itemize-changes to get something akin to
+	# diff output, but rsync is far more thorough in detecting differences
+	# (diff doesn't compare file metadata, and cannot handle special
+	# files).  Set the ignore_mtimes flag to ignore mtime modifications.
+	if [[ $ignore_mtime -eq 0 ]]; then
+		diff="$(rsync -ni -acAHX --delete "$1/" "$2/")"
+	else
+		diff="$(rsync -ni -acAHX --delete "$1/" "$2/" | \
+			sed '/.[df]..t....../d')"
+	fi
 	rv=0
+
 	if [ -n "$diff" ]; then
 		echo "$diff"
 		rv=1

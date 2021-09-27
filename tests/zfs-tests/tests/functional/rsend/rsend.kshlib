@@ -204,7 +204,7 @@ function cmp_ds_cont
 	srcdir=$(get_prop mountpoint $src_fs)
 	dstdir=$(get_prop mountpoint $dst_fs)
 
-	directory_diff $srcdir $dstdir
+	directory_diff $srcdir $dstdir 1
 	return $?
 }
 
