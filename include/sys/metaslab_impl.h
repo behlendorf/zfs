@@ -426,6 +426,7 @@ struct metaslab {
 
 	boolean_t	ms_condensing;	/* condensing? */
 	boolean_t	ms_condense_wanted;
+	boolean_t	ms_unavailable;
 
 	/*
 	 * The number of consumers which have disabled the metaslab.

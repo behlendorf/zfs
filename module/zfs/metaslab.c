@@ -146,6 +146,13 @@ static int zfs_mg_fragmentation_threshold = 95;
 static int zfs_metaslab_fragmentation_threshold = 70;
 
 /*
+ * Verify the space maps for a metaslab are intact during import. If they
+ * cannot be read then disable the metaslab for new allocations. This can
+ * be used to import a damaged pool in order to help recover the data.
+ */
+static int zfs_metaslab_verify_space_maps = 0;
+
+/*
  * When set will load all metaslabs when pool is first opened.
  */
 int metaslab_debug_load = B_FALSE;
@@ -2245,6 +2252,12 @@ metaslab_load_impl(metaslab_t *msp)
 	ASSERT(msp->ms_loading);
 	ASSERT(!msp->ms_condensing);
 
+	if (msp->ms_unavailable) {
+		vdev_t *vd = msp->ms_group->mg_vd;
+		vdev_dbgmsg(vd, "Cannot load space map");
+		return (EIO);
+	}
+
 	/*
 	 * We temporarily drop the lock to unblock other operations while we
 	 * are reading the space map. Therefore, metaslab_sync() and
@@ -2625,6 +2638,37 @@ metaslab_space_update(vdev_t *vd, metaslab_class_t *mc, int64_t alloc_delta,
 	    vdev_deflated_space(vd, space_delta));
 }
 
+static int
+metaslab_verify_space_maps(metaslab_group_t *mg, metaslab_t *ms,
+    uint64_t object)
+{
+	vdev_t *vd = mg->mg_vd;
+	spa_t *spa = vd->vdev_spa;
+	objset_t *mos = spa->spa_meta_objset;
+	space_map_t *sm = NULL;
+	range_tree_t *verify_tree;
+
+	int error = space_map_open(&sm, mos, object, ms->ms_start,
+	    ms->ms_size, vd->vdev_ashift);
+
+	uint64_t shift, start;
+	range_seg_type_t type =
+	    metaslab_calculate_range_tree_type(vd, ms, &start, &shift);
+
+	if (error == 0) {
+		verify_tree = range_tree_create(NULL, type, NULL, start, shift);
+
+		if (sm != NULL)
+			error = space_map_load(sm, verify_tree, SM_FREE);
+
+		range_tree_vacate(verify_tree, NULL, NULL);
+		range_tree_destroy(verify_tree);
+		space_map_close(sm);
+	}
+
+	return (error);
+}
+
 int
 metaslab_init(metaslab_group_t *mg, uint64_t id, uint64_t object,
     uint64_t txg, metaslab_t **msp)
@@ -2666,16 +2710,26 @@ metaslab_init(metaslab_group_t *mg, uint64_t id, uint64_t object,
 	 */
 	if (object != 0 && !(spa->spa_mode == SPA_MODE_READ &&
 	    !spa->spa_read_spacemaps)) {
-		error = space_map_open(&ms->ms_sm, mos, object, ms->ms_start,
-		    ms->ms_size, vd->vdev_ashift);
+		vdev_dbgmsg(vd, "Initializing space map [object=%llu]",
+		    (u_longlong_t)object);
 
-		if (error != 0) {
-			kmem_free(ms, sizeof (metaslab_t));
-			return (error);
+		if (zfs_metaslab_verify_space_maps && (error =
+		    metaslab_verify_space_maps(mg, ms, object)) != 0) {
+			ms->ms_unavailable = B_TRUE;
+			vdev_dbgmsg(vd, "Disable space map [object=%llu "
+			    "error=%d]", (u_longlong_t)object, error);
+		} else {
+			error = space_map_open(&ms->ms_sm, mos, object,
+			    ms->ms_start, ms->ms_size, vd->vdev_ashift);
+
+			if (error != 0) {
+				kmem_free(ms, sizeof (metaslab_t));
+				return (error);
+			}
+
+			ASSERT(ms->ms_sm != NULL);
+			ms->ms_allocated_space = space_map_allocated(ms->ms_sm);
 		}
-
-		ASSERT(ms->ms_sm != NULL);
-		ms->ms_allocated_space = space_map_allocated(ms->ms_sm);
 	}
 
 	uint64_t shift, start;
@@ -2708,6 +2762,9 @@ metaslab_init(metaslab_group_t *mg, uint64_t id, uint64_t object,
 
 	metaslab_group_add(mg, ms);
 	metaslab_set_fragmentation(ms, B_FALSE);
+
+	if (ms->ms_unavailable)
+		metaslab_disable(ms);
 
 	/*
 	 * If we're opening an existing pool (txg == 0) or creating
@@ -2771,6 +2828,9 @@ metaslab_fini(metaslab_t *msp)
 	spa_t *spa = vd->vdev_spa;
 
 	metaslab_fini_flush_data(msp);
+
+	if (msp->ms_unavailable)
+		metaslab_enable(msp, B_FALSE, B_FALSE);
 
 	metaslab_group_remove(mg, msp);
 
@@ -6238,6 +6298,9 @@ ZFS_MODULE_PARAM(zfs_metaslab, metaslab_, fragmentation_factor_enabled, INT,
 
 ZFS_MODULE_PARAM(zfs_metaslab, zfs_metaslab_, fragmentation_threshold, INT,
 	ZMOD_RW, "Fragmentation for metaslab to allow allocation");
+
+ZFS_MODULE_PARAM(zfs_metaslab, zfs_metaslab_, verify_space_maps, INT,
+	ZMOD_RW, "Verify metaslab space maps during import");
 
 ZFS_MODULE_PARAM(zfs_metaslab, metaslab_, lba_weighting_enabled, INT, ZMOD_RW,
 	"Prefer metaslabs with lower LBAs");
