@@ -149,7 +149,7 @@ main(int argc, char **argv)
 {
 	zfs_handle_t *zhp;
 	char prop[ZFS_MAXPROPLEN];
-	uint64_t zfs_version = 0;
+	uint64_t zfs_version = 5;
 	char mntopts[MNT_LINE_MAX] = { '\0' };
 	char badopt[MNT_LINE_MAX] = { '\0' };
 	char mtabopt[MNT_LINE_MAX] = { '\0' };
@@ -280,6 +280,7 @@ main(int argc, char **argv)
 		(void) zfs_prop_get(zhp, ZFS_PROP_MOUNTPOINT, prop,
 		    sizeof (prop), NULL, NULL, 0, B_FALSE);
 
+#if 0
 	/*
 	 * Fetch the max supported zfs version in case we get ENOTSUP
 	 * back from the mount command, since we need the zfs handle
@@ -293,6 +294,7 @@ main(int argc, char **argv)
 		libzfs_fini(g_zfs);
 		return (MOUNT_SYSERR);
 	}
+#endif
 
 	/*
 	 * Legacy mount points may only be mounted using 'mount', never using
