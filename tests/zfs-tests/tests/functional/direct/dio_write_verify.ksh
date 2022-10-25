@@ -70,7 +70,7 @@ fi
 
 log_onexit cleanup
 
-ITERATIONS=3
+ITERATIONS=30
 NUMBLOCKS=8
 mntpnt=$(get_prop mountpoint $TESTPOOL/$TESTFS)
 
@@ -109,26 +109,37 @@ for i in $(seq 1 $ITERATIONS); do
 	# Clearing out dio_verify from event logs
 	log_must zpool events -c
 
+	prev_arc_read=$(get_iostats_stat $TESTPOOL arc_read_count)
+	prev_dio_read=$(get_iostats_stat $TESTPOOL direct_read_count)
 	prev_dio_wr=$(get_iostats_stat $TESTPOOL direct_write_count)
 	log_must manipulate_user_buffer -o "$mntpnt/direct-write.iso" -r 5 \
 	    -n $NUMBLOCKS -v
-	log_mustnot dd if=$mntpnt/direct-write.iso of=/dev/null bs=128k \
+	dd if=$mntpnt/direct-write.iso of=/dev/null bs=128k \
 	    count=$NUMBLOCKS
 
 	# Getting new Direct I/O write count, Direct I/O write checksum verify
 	# errors and zevents.
+	curr_arc_read=$(get_iostats_stat $TESTPOOL arc_read_count)
+	curr_dio_read=$(get_iostats_stat $TESTPOOL direct_read_count)
 	curr_dio_wr=$(get_iostats_stat $TESTPOOL direct_write_count)
 	DIO_VERIFIES=$(zpool status -dp | awk -v d="raidz" '$0 ~ d {print $6}')
 	DIO_VERIFY_EVENTS=$(zpool events | grep -c dio_verify)
 
-	log_must [ $DIO_VERIFIES -gt 0 ]
-	log_must [ $DIO_VERIFY_EVENTS -gt 0 ]
-	log_must [ $curr_dio_wr -gt $prev_dio_wr ]
+#	log_must [ $DIO_VERIFIES -gt 0 ]
+#	log_must [ $DIO_VERIFY_EVENTS -gt 0 ]
+#	log_must [ $curr_dio_wr -gt $prev_dio_wr ]
+	echo "DIO_VERIFIES: ${DIO_VERIFIES}"
+	echo "DIO_VERIFY_EVENTS: ${DIO_VERIFY_EVENTS}"
+	echo "Direct I/O write count: $((curr_dio_wr - prev_dio_wr))"
+	echo "Read ARC count: $((curr_arc_read - prev_arc_read))"
+	echo "Direct I/O read count: $((curr_dio_read - prev_dio_read))"
+
 
 	# Verifying there are checksum errors
 	cksum=$(zpool status -P -v $TESTPOOL | awk -v v="$firstvdev" '$0 ~ v \
 	    {print $5}')
-	log_must [ $cksum -ne 0 ]
+#	log_must [ $cksum -ne 0 ]
+	echo "ZPool checksum errors: ${cksum}"
 
 	log_must rm -f "$mntpnt/direct-write.iso"
 done
@@ -146,21 +157,30 @@ for i in $(seq 1 $ITERATIONS); do
 	# Clearing out dio_verify from event logs
 	log_must zpool events -c
 
+	prev_arc_read=$(get_iostats_stat $TESTPOOL arc_read_count)
 	prev_dio_wr=$(get_iostats_stat $TESTPOOL direct_write_count)
+	prev_dio_read=$(get_iostats_stat $TESTPOOL direct_read_count)
 	log_must manipulate_user_buffer -o "$mntpnt/direct-write.iso" -r 5 \
 	    -n $NUMBLOCKS -v
-	log_must dd if=$mntpnt/direct-write.iso of=/dev/null bs=128k \
+	dd if=$mntpnt/direct-write.iso of=/dev/null bs=128k \
 	    count=$NUMBLOCKS
 
 	# Getting new Direct I/O write count, Direct I/O write checksum verify
 	# errors and zevents.
+	curr_arc_read=$(get_iostats_stat $TESTPOOL arc_read_count)
 	curr_dio_wr=$(get_iostats_stat $TESTPOOL direct_write_count)
+	curr_dio_read=$(get_iostats_stat $TESTPOOL direct_read_count)
 	DIO_VERIFIES=$(zpool status -dp | awk -v d="raidz" '$0 ~ d {print $6}')
 	DIO_VERIFY_EVENTS=$(zpool events | grep -c dio_verify)
 
-	log_must [ $DIO_VERIFIES -gt 0 ]
-	log_must [ $DIO_VERIFY_EVENTS -gt 0 ]
-	log_must [ $curr_dio_wr -gt $prev_dio_wr ]
+#	log_must [ $DIO_VERIFIES -gt 0 ]
+#	log_must [ $DIO_VERIFY_EVENTS -gt 0 ]
+#	log_must [ $curr_dio_wr -gt $prev_dio_wr ]
+	echo "DIO_VERIFIES: ${DIO_VERIFIES}"
+	echo "DIO_VERIFY_EVENTS: ${DIO_VERIFY_EVENTS}"
+	echo "Direct I/O write count: $((curr_dio_wr - prev_dio_wr))"
+	echo "Read ARC count: $((curr_arc_read - prev_arc_read))"
+	echo "Direct I/O read count: $((curr_dio_read - prev_dio_read))"
 
 	log_must check_pool_status $TESTPOOL "errors" "No known data errors"
 	log_must rm -f "$mntpnt/direct-write.iso"
