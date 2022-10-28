@@ -411,13 +411,11 @@ zpl_iter_read(struct kiocb *kiocb, struct iov_iter *to)
 		return (-error);
 	} else if (direct == ZFS_DIRECT_IO_ENABLED) {
 		ssize_t read = zpl_iter_read_direct(kiocb, to);
-		/*
-		 * In the event we get EAGAIN we are falling back to
-		 * buffered IO.
-		 */
-		if ((read == -EINVAL || !iov_iter_count(to)) &&
-		    read != -EAGAIN)
+
+		if (read >= 0 || read != -EAGAIN)
 			return (read);
+
+		/* Otherwise fallback to a buffered read */
 	}
 
 	return (zpl_iter_read_buffered(kiocb, to));
@@ -549,12 +547,7 @@ zpl_iter_write(struct kiocb *kiocb, struct iov_iter *from)
 		ssize_t wrote = zpl_generic_file_direct_write(kiocb, from,
 		    kiocb->ki_pos);
 
-		/*
-		 * In the event we get EAGAIN we are falling back to
-		 * buffered IO.
-		 */
-		if ((wrote == -EINVAL || !iov_iter_count(from)) &&
-		    wrote != -EAGAIN) {
+		if (wrote >= 0 || wrote != -EAGAIN) {
 			/*
 			 * generic_file_direct_write() will update
 			 * kiocb->ki_pos on a successful Direct IO write.
@@ -562,13 +555,13 @@ zpl_iter_write(struct kiocb *kiocb, struct iov_iter *from)
 			IMPLY(!iov_iter_count(from),
 			    (offset + count) == kiocb->ki_pos);
 			return (wrote);
-		} else {
-			/*
-			 * If we are falling back to a buffered write, then the
-			 * file position should not be updated at this point.
-			 */
-			ASSERT3U(offset, ==, kiocb->ki_pos);
 		}
+
+		/*
+		 * If we are falling back to a buffered write, then the
+		 * file position must not have been updated at this point.
+		 */
+		ASSERT3U(offset, ==, kiocb->ki_pos);
 	}
 
 	return (zpl_iter_write_buffered(kiocb, from));
