@@ -487,6 +487,7 @@ spa_config_tryenter(spa_t *spa, int locks, void *tag, krw_t rw)
 				return (0);
 			}
 			scl->scl_writer = curthread;
+			scl->scl_tag = tag;
 		}
 		scl->scl_count++;
 		mutex_exit(&scl->scl_lock);
@@ -521,6 +522,7 @@ spa_config_enter(spa_t *spa, int locks, const void *tag, krw_t rw)
 				scl->scl_write_wanted--;
 			}
 			scl->scl_writer = curthread;
+			scl->scl_tag = tag;
 		}
 		scl->scl_count++;
 		mutex_exit(&scl->scl_lock);
@@ -542,6 +544,7 @@ spa_config_exit(spa_t *spa, int locks, const void *tag)
 			ASSERT(scl->scl_writer == NULL ||
 			    scl->scl_writer == curthread);
 			scl->scl_writer = NULL;	/* OK in either case */
+			scl->scl_tag = NULL;
 			cv_broadcast(&scl->scl_cv);
 		}
 		mutex_exit(&scl->scl_lock);

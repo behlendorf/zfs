@@ -145,6 +145,7 @@ struct spa_aux_vdev {
 typedef struct spa_config_lock {
 	kmutex_t	scl_lock;
 	kthread_t	*scl_writer;
+	const void	*scl_tag;
 	int		scl_write_wanted;
 	int		scl_count;
 	kcondvar_t	scl_cv;
