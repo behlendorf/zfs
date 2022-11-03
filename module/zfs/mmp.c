@@ -446,15 +446,16 @@ mmp_write_uberblock(spa_t *spa)
 	hrtime_t lock_acquire_time = gethrtime();
 	while (!spa_config_tryenter(spa, SCL_STATE, mmp_tag, RW_READER)) {
 
-		lock_acquire_time = gethrtime() - lock_acquire_time;
-		if (lock_acquire_time > MSEC2NSEC(MMP_MIN_INTERVAL) * 10) {
+		if ((gethrtime() - lock_acquire_time) >
+		    (MSEC2NSEC(MMP_MIN_INTERVAL) * 10)) {
 #if defined(_KERNEL)
 			spa_config_lock_t *scl =
 			    &spa->spa_config_lock[SCL_STATE];
 			zfs_dbgmsg("MMP SCL_STATE tryenter, pool '%s' "
-			    "took %llu ns gethrtime %llu scl_writer=%s "
+			    "took %llu ms scl_writer=%s "
 			    "scl_tag=%s scl_write_wanted=%d scl_count=%d",
-			    spa_name(spa), lock_acquire_time, gethrtime(),
+			    spa_name(spa),
+			    NSEC2MSEC(gethrtime() - lock_acquire_time),
 			    scl->scl_writer->comm ? : "NULL",
 			    (char *)scl->scl_tag ? : "NULL",
 			    scl->scl_write_wanted, scl->scl_count);
@@ -462,8 +463,8 @@ mmp_write_uberblock(spa_t *spa)
 
 			spa_config_enter(spa, SCL_STATE, mmp_tag, RW_READER);
 			zfs_dbgmsg("MMP SCL_STATE enter, pool '%s' took "
-			    "%llu ns gethrtime %llu", spa_name(spa),
-			    lock_acquire_time, gethrtime());
+			    "%llu ms", spa_name(spa),
+			    NSEC2MSEC(gethrtime() - lock_acquire_time));
 			break;
 		}
 
