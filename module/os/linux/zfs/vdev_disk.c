@@ -74,6 +74,12 @@ typedef struct dio_request {
 	struct bio		*dr_bio[0];	/* Attached bio's */
 } dio_request_t;
 
+/*
+ * BIO request failfast mask.
+ */
+
+static unsigned int zfs_vdev_failfast_mask = 1;
+
 static fmode_t
 vdev_bdev_mode(spa_mode_t spa_mode)
 {
@@ -638,8 +644,10 @@ __vdev_disk_physio(struct block_device *bdev, zio_t *zio,
 retry:
 	dr = vdev_disk_dio_alloc(bio_count);
 
-	if (zio && !(zio->io_flags & (ZIO_FLAG_IO_RETRY | ZIO_FLAG_TRYHARD)))
-		bio_set_flags_failfast(bdev, &flags);
+	if (zio && !(zio->io_flags & (ZIO_FLAG_IO_RETRY | ZIO_FLAG_TRYHARD))) {
+		bio_set_flags_failfast(bdev, &flags, zfs_vdev_failfast_mask & 1,
+		    zfs_vdev_failfast_mask & 2, zfs_vdev_failfast_mask & 4);
+	}
 
 	dr->dr_zio = zio;
 
@@ -1020,3 +1028,6 @@ param_set_max_auto_ashift(const char *buf, zfs_kernel_param_t *kp)
 
 	return (0);
 }
+
+ZFS_MODULE_PARAM(zfs_vdev, zfs_vdev_, failfast_mask, UINT, ZMOD_RW,
+	"Defines failfast mask: 1 - device, 2 - transport, 4 - driver");
