@@ -7243,6 +7243,16 @@ spa_vdev_detach(spa_t *spa, uint64_t guid, uint64_t pguid, int replace_done)
 	spa_event_notify(spa, vd, NULL, ESC_ZFS_VDEV_REMOVE);
 	spa_notify_waiters(spa);
 
+	/*
+	 * When actively resilvering and a device with missing data is
+	 * detached restart the resilver to reassess if the resilver is
+	 * still required.  It may no longer be needed be needed is the
+	 * new replacement device was itself detached.
+	 */
+	dsl_pool_t *dp = spa->spa_dsl_pool;
+	if (dsl_scan_resilvering(dp))
+		dsl_scan_restart_resilver(dp, txg + TXG_CONCURRENT_STATES);
+
 	/* hang on to the spa before we release the lock */
 	spa_open_ref(spa, FTAG);
 
