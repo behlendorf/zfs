@@ -222,10 +222,9 @@ zfs_close(struct inode *ip, int flag, cred_t *cr)
 #if defined(_KERNEL)
 /*
  * When a file is memory mapped, we must keep the IO data synchronized
- * between the DMU cache and the memory mapped pages.  What this means:
- *
- * On Write:	If we find a memory mapped page, we write to *both*
- *		the page and the dmu buffer.
+ * between the DMU cache and the memory mapped pages.  What this means
+ * is on write if we find a memory mapped page, we write to *both* the
+ * page and the dmu buffer.
  */
 void
 update_pages(znode_t *zp, int64_t start, int len, objset_t *os)
@@ -243,6 +242,9 @@ update_pages(znode_t *zp, int64_t start, int len, objset_t *os)
 
 		pp = find_lock_page(mp, start >> PAGE_SHIFT);
 		if (pp) {
+			if (unlikely(!PageUptodate(pp)))
+				dump_page(pp, "not uptodate");
+
 			if (mapping_writably_mapped(mp))
 				flush_dcache_page(pp);
 
@@ -267,14 +269,19 @@ update_pages(znode_t *zp, int64_t start, int len, objset_t *os)
 }
 
 /*
- * When a file is memory mapped, we must keep the IO data synchronized
- * between the DMU cache and the memory mapped pages.  What this means:
+ * When a file is memory mapped, we must keep the I/O data synchronized
+ * between the DMU cache and the memory mapped pages.  What this means
+ * is we preferentially read from memory mapped pages.  If the pages
+ * aren't mapped or uptodate (due to an I/O error) fallback to reading
+ * through the dmu.
  *
- * On Read:	We "read" preferentially from memory mapped pages,
- *		else we default from the dmu buffer.
- *
- * NOTE: We will always "break up" the IO into PAGESIZE uiomoves when
- *	 the file is memory mapped.
+ * DEBUG:
+ * page:fffffaa6a8138bc0 refcount:4 mapcount:0 mapping:0000000009d2d833 index:0x73b
+ * zpl_address_space_operations [zfs] name:"file"
+ * flags: 0xd7ffffc0000081(locked|waiters|node=3|zone=2|lastcpupid=0x1fffff)
+ * raw: 00d7ffffc0000081 dead000000000100 dead000000000200 ffff8927f61f8378
+ * raw: 000000000000073b 0000000000000000 00000005ffffffff ffff89369536c000
+ * page dumped because: not uptodate
  */
 int
 mappedread(znode_t *zp, int nbytes, zfs_uio_t *uio)
@@ -289,14 +296,19 @@ mappedread(znode_t *zp, int nbytes, zfs_uio_t *uio)
 	void *pb;
 
 	start = uio->uio_loffset;
-	off = start & (PAGE_SIZE-1);
+	off = start & (PAGE_SIZE - 1);
 	for (start &= PAGE_MASK; len > 0; start += PAGE_SIZE) {
 		bytes = MIN(PAGE_SIZE - off, len);
 
 		pp = find_lock_page(mp, start >> PAGE_SHIFT);
 		if (pp) {
-			ASSERT(PageUptodate(pp));
 			unlock_page(pp);
+
+			if (!PageUptodate(pp)) {
+				dump_page(pp, "not uptodate (BEFORE)");
+				wait_on_page_bit(pp, PG_uptodate);
+				dump_page(pp, "not uptodate (AFTER)");
+			}
 
 			pb = kmap(pp);
 			error = zfs_uiomove(pb + off, bytes, UIO_READ, uio);
@@ -308,8 +320,35 @@ mappedread(znode_t *zp, int nbytes, zfs_uio_t *uio)
 			mark_page_accessed(pp);
 			put_page(pp);
 		} else {
+/*
+			if (pp) {
+				zfsvfs_t *zfsvfs = ITOZSB(ip);
+				struct page *pl[1] = { pp };
+
+				ASSERT(!PageDirty(pp));
+
+				error = zfs_fillpage(ip, pl, 1);
+				dataset_kstats_update_read_kstats(zfsvfs,
+				    PAGE_SIZE);
+				if (error) {
+					SetPageError(pp);
+					ClearPageUptodate(pp);
+				} else {
+					ClearPageError(pp);
+					SetPageUptodate(pp);
+					flush_dcache_page(pp);
+				}
+				dump_page(pp, "not uptodate (BEFORE)");
+				unlock_page(pp);
+				wait_on_page_bit(pp, PG_uptodate);
+				dump_page(pp, "not uptodate (AFTER)");
+
+				put_page(pp);
+			} else {
+*/
 			error = dmu_read_uio_dbuf(sa_get_db(zp->z_sa_hdl),
 			    uio, bytes);
+//			}
 		}
 
 		len -= bytes;
@@ -987,7 +1026,7 @@ top:
 
 	mutex_enter(&zp->z_lock);
 	may_delete_now = atomic_read(&ZTOI(zp)->i_count) == 1 &&
-	    !(zp->z_is_mapped);
+	    !zn_has_cached_data(zp, 0, LLONG_MAX);
 	mutex_exit(&zp->z_lock);
 
 	/*
@@ -1075,7 +1114,8 @@ top:
 		    &xattr_obj_unlinked, sizeof (xattr_obj_unlinked));
 		delete_now = may_delete_now && !toobig &&
 		    atomic_read(&ZTOI(zp)->i_count) == 1 &&
-		    !(zp->z_is_mapped) && xattr_obj == xattr_obj_unlinked &&
+		    !zn_has_cached_data(zp, 0, LLONG_MAX) &&
+		    xattr_obj == xattr_obj_unlinked &&
 		    zfs_external_acl(zp) == acl_obj;
 	}
 
@@ -3652,6 +3692,7 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc,
 
 	/* Page is beyond end of file */
 	if (pgoff >= offset) {
+		/* XXX: Missing page state error handling? */
 		unlock_page(pp);
 		zfs_exit(zfsvfs, FTAG);
 		return (0);
@@ -3703,14 +3744,22 @@ zfs_putpage(struct inode *ip, struct page *pp, struct writeback_control *wbc,
 	 */
 	mapping = pp->mapping;
 	redirty_page_for_writepage(wbc, pp);
+	uint32_t page_flags = pp->flags;
 	unlock_page(pp);
 
 	zfs_locked_range_t *lr = zfs_rangelock_enter(&zp->z_rangelock,
 	    pgoff, pglen, RL_WRITER);
+
 	lock_page(pp);
+
+	if ((int)(page_flags & ~0x80) != (int)pp->flags) {
+		pr_warn("changes %x != %x\n", (int)page_flags, (int)pp->flags);
+		dump_page(pp, "page flags changed");
+	}
 
 	/* Page mapping changed or it was no longer dirty, we're done */
 	if (unlikely((mapping != pp->mapping) || !PageDirty(pp))) {
+		dump_page(pp, "mapping change or not dirty");
 		unlock_page(pp);
 		zfs_rangelock_exit(lr);
 		zfs_exit(zfsvfs, FTAG);

@@ -551,7 +551,9 @@ zfs_znode_alloc(zfsvfs_t *zfsvfs, dmu_buf_t *db, int blksz,
 	ASSERT3P(zp->z_xattr_cached, ==, NULL);
 	zp->z_unlinked = B_FALSE;
 	zp->z_atime_dirty = B_FALSE;
+#if !defined(HAVE_FILEMAP_RANGE_HAS_PAGE)
 	zp->z_is_mapped = B_FALSE;
+#endif
 	zp->z_is_ctldir = B_FALSE;
 	zp->z_suspended = B_FALSE;
 	zp->z_sa_hdl = NULL;
@@ -1585,6 +1587,9 @@ zfs_zero_partial_page(znode_t *zp, uint64_t start, uint64_t len)
 
 	pp = find_lock_page(mp, start >> PAGE_SHIFT);
 	if (pp) {
+		if (unlikely(!PageUptodate(pp)))
+			dump_page(pp, "not uptodate");
+
 		if (mapping_writably_mapped(mp))
 			flush_dcache_page(pp);
 
@@ -1641,7 +1646,7 @@ zfs_free_range(znode_t *zp, uint64_t off, uint64_t len)
 	 * Zero partial page cache entries.  This must be done under a
 	 * range lock in order to keep the ARC and page cache in sync.
 	 */
-	if (zp->z_is_mapped) {
+	if (zn_has_cached_data(zp, off, off + len - 1)) {
 		loff_t first_page, last_page, page_len;
 		loff_t first_page_offset, last_page_offset;
 
