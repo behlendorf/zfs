@@ -377,6 +377,15 @@ zfs_process_add(zpool_handle_t *zhp, nvlist_t *vdev, boolean_t labeled)
 
 	if (is_mpath_wholedisk) {
 		/* Don't label device mapper or multipath disks. */
+		zed_log_msg(LOG_INFO,
+		    "  it's a multipath wholedisk, don't label");
+		if (zpool_prepare_disk(zhp, vdev, "autoreplace") != 0) {
+			zed_log_msg(LOG_INFO,
+			    "  zpool_prepare_disk: could not "
+			    "prepare '%s' (%s)", fullpath,
+			    libzfs_error_description(g_zfshdl));
+			return;
+		}
 	} else if (!labeled) {
 		/*
 		 * we're auto-replacing a raw disk, so label it first
@@ -399,8 +408,10 @@ zfs_process_add(zpool_handle_t *zhp, nvlist_t *vdev, boolean_t labeled)
 		 * If this is a request to label a whole disk, then attempt to
 		 * write out the label.
 		 */
-		if (zpool_label_disk(g_zfshdl, zhp, leafname) != 0) {
-			zed_log_msg(LOG_INFO, "  zpool_label_disk: could not "
+		if (zpool_prepare_and_label_disk(g_zfshdl, zhp, leafname,
+		    vdev, "autoreplace") != 0) {
+			zed_log_msg(LOG_INFO,
+			    "  zpool_prepare_and_label_disk: could not "
 			    "label '%s' (%s)", leafname,
 			    libzfs_error_description(g_zfshdl));
 

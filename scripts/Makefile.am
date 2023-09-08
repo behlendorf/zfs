@@ -9,6 +9,10 @@ dist_pkgdata_SCRIPTS = \
 	zloop.sh \
 	zfs-helpers.sh
 
+libexecdir = $(zfsexecdir)
+dist_libexec_SCRIPTS = \
+	zfs_prepare_disk
+
 EXTRA_SCRIPTS = \
 	commitcheck.sh \
 	common.sh.in \
