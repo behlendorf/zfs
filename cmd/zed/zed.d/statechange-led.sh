@@ -120,7 +120,7 @@ state_to_val()
 {
 	state="$1"
 	case "$state" in
-		FAULTED|DEGRADED|UNAVAIL)
+		FAULTED|DEGRADED|UNAVAIL|REMOVED)
 			echo 1
 			;;
 		ONLINE)
