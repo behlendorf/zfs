@@ -27,52 +27,78 @@
 #
 # STRATEGY:
 # 1. Create zpool
-# 2. Force DEGRADE vdev
-# 3. Verify only the DEGRADED vdev and parents show
+# 2. Force DEGRADE, FAULT, or inject slow IOs for vdevs
+# 3. Verify vdevs are reported correctly with -e and -s
+# 4. Verify parents are reported as DEGRADED
+# 5. Verify healthy children are not reported
 #
-
-function mkvdev
-{
-	for vdev in {1..$children};do
-		truncate -s $MINVDEVSIZE $TESTDIR/vdev$vdev
-	done
-}
 
 function cleanup
 {
-	log_must zinject -c all
-	datasetexists $TESTPOOL2 && log_must zpool destroy $TESTPOOL2
-	rm -f $TESTDIR/vdev_a
+	log_must set_tunable64 ZIO_SLOW_IO_MS $OLD_SLOW_IO
+	zinject -c all
+	poolexists $TESTPOOL2 && destroy_pool $TESTPOOL2
+	log_must rm -f $all_vdevs
 }
 
 log_assert "Verify 'zpool -e'"
 
-for raid_type in "draid" "raidz1"; do
+log_onexit cleanup
 
-	parity=1
-	data=4
-	spare=1
-	children=6
+all_vdevs=$(echo $TESTDIR/vdev{1..6})
+log_must mkdir -p $TESTDIR
+log_must truncate -s $MINVDEVSIZE $all_vdevs
 
-	if [[ "$raid_type" = "draid" ]]; then
-		raidfmt="draid${parity}:${data}d:${children}c:${spare}s"
-	else
-		raidfmt="raidz${parity}"
-	fi
+OLD_SLOW_IO=$(get_tunable ZIO_SLOW_IO_MS)
 
-	log_must mkdir -p $TESTDIR
-	log_must eval mkvdev
-	log_must eval "zpool create -f -m /$TESTPOOL2 $TESTPOOL2 $raidfmt " \
-		"$TESTDIR/vdev1 $TESTDIR/vdev2 $TESTDIR/vdev3" \
-		"$TESTDIR/vdev4 $TESTDIR/vdev5" "$TESTDIR/vdev6" 
+for raid_type in "draid2:3d:6c:1s" "raidz2"; do
 
+	log_must zpool create -f $TESTPOOL2 $raid_type $all_vdevs
+
+	# Check DEGRADED vdevs are shown.
 	log_must check_vdev_state $TESTPOOL2 $TESTDIR/vdev4 "ONLINE"
 	log_must zinject -d $TESTDIR/vdev4 -A degrade $TESTPOOL2
-	log_must eval "zpool status $TESTPOOL2"
-	log_must check_vdev_state $TESTPOOL2 $TESTDIR/vdev4 "DEGRADED"
-	log_must eval "zpool status -e $TESTPOOL2"
+	log_must eval "zpool status -e $TESTPOOL2 | grep $TESTDIR/vdev4 | grep DEGRADED"
+
+	# Check FAULTED vdevs are shown.
+	log_must check_vdev_state $TESTPOOL2 $TESTDIR/vdev5 "ONLINE"
+	log_must zinject -d $TESTDIR/vdev5 -A fault $TESTPOOL2
+	log_must eval "zpool status -e $TESTPOOL2 | grep $TESTDIR/vdev5 | grep FAULTED"
+
+	# Check no ONLINE vdevs are shown
 	log_mustnot eval "zpool status -e $TESTPOOL2 | grep ONLINE"
-	cleanup
+
+	# Check no ONLINE slow vdevs are show.  Then mark IOs greater than
+	# 10ms slow, delay IOs 20ms to vdev6, check slow IOs.
+	log_must check_vdev_state $TESTPOOL2 $TESTDIR/vdev6 "ONLINE"
+	log_mustnot eval "zpool status -es $TESTPOOL2 | grep ONLINE"
+
+	log_must set_tunable64 ZIO_SLOW_IO_MS 10
+	log_must zinject -d $TESTDIR/vdev6 -D20:100 $TESTPOOL2
+	log_must mkfile 1048576 /$TESTPOOL2/testfile
+	sync_pool $TESTPOOL2
+	log_must set_tunable64 ZIO_SLOW_IO_MS $OLD_SLOW_IO
+
+	# Check vdev6 slow IOs are only shown when requested with -s.
+	log_mustnot eval "zpool status -e $TESTPOOL2 | grep $TESTDIR/vdev6 | grep ONLINE"
+	log_must eval "zpool status -es $TESTPOOL2 | grep $TESTDIR/vdev6 | grep ONLINE"
+
+	# Pool level and top-vdev level status must be DEGRADED.
+	log_must eval "zpool status -e $TESTPOOL2 | grep $TESTPOOL2 | grep DEGRADED"
+	log_must eval "zpool status -e $TESTPOOL2 | grep $raid_type | grep DEGRADED"
+
+	# Check that healthy vdevs[1-3] aren't shown with -e.
+	log_must check_vdev_state $TESTPOOL2 $TESTDIR/vdev1 "ONLINE"
+	log_must check_vdev_state $TESTPOOL2 $TESTDIR/vdev2 "ONLINE"
+	log_must check_vdev_state $TESTPOOL2 $TESTDIR/vdev3 "ONLINE"
+	log_mustnot eval "zpool status -es $TESTPOOL2 | grep $TESTDIR/vdev1 | grep ONLINE"
+	log_mustnot eval "zpool status -es $TESTPOOL2 | grep $TESTDIR/vdev2 | grep ONLINE"
+	log_mustnot eval "zpool status -es $TESTPOOL2 | grep $TESTDIR/vdev3 | grep ONLINE"
+
+	log_must zinject -c all
+	log_must zpool status -es $TESTPOOL2
+
+	zpool destroy $TESTPOOL2
 done
 
 log_pass "Verify zpool status -e shows only unhealthy vdevs"
