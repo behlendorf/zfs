@@ -773,7 +773,7 @@ extern int bpobj_enqueue_free_cb(void *arg, const blkptr_t *bp, dmu_tx_t *tx);
 
 #define	SPA_ASYNC_CONFIG_UPDATE			0x01
 #define	SPA_ASYNC_REMOVE			0x02
-#define	SPA_ASYNC_PROBE				0x04
+#define	SPA_ASYNC_FAULT_VDEV			0x04
 #define	SPA_ASYNC_RESILVER_DONE			0x08
 #define	SPA_ASYNC_RESILVER			0x10
 #define	SPA_ASYNC_AUTOEXPAND			0x20
