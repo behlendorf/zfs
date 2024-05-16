@@ -420,7 +420,7 @@ get_usage(zpool_help_t idx)
 		    "[<device> ...]\n"));
 	case HELP_STATUS:
 		return (gettext("\tstatus [--power] [-c [script1,script2,...]] "
-		    "[-DegiLpPstvx] [-T d|u] [pool] ...\n"
+		    "[-DegijLpPstvx] [-T d|u] [pool] ...\n"
 		    "\t    [interval [count]]\n"));
 	case HELP_UPGRADE:
 		return (gettext("\tupgrade\n"
@@ -2211,6 +2211,7 @@ typedef struct status_cbdata {
 	boolean_t	cb_print_vdev_trim;
 	vdev_cmd_data_list_t	*vcdl;
 	boolean_t	cb_print_power;
+	boolean_t	cb_print_json;
 } status_cbdata_t;
 
 /* Return 1 if string is NULL, empty, or whitespace; return 0 otherwise. */
@@ -8629,6 +8630,11 @@ status_callback(zpool_handle_t *zhp, void *data)
 
 	cbp->cb_count++;
 
+	if (cbp->cb_print_json) {
+		(void) nvlist_print_json(stdout, config);
+		return (0);
+	}
+
 	/*
 	 * If we were given 'zpool status -x', only report those pools with
 	 * problems.
@@ -9110,7 +9116,7 @@ status_callback(zpool_handle_t *zhp, void *data)
 }
 
 /*
- * zpool status [-c [script1,script2,...]] [-DegiLpPstvx] [--power] [-T d|u] ...
+ * zpool status [-c [script1,script2,...]] [-DegijLpPstvx] [--power] [-T d|u]
  *              [pool] [interval [count]]
  *
  *	-c CMD	For each vdev, run command CMD
@@ -9118,6 +9124,7 @@ status_callback(zpool_handle_t *zhp, void *data)
  *	-e	Display only unhealthy vdevs
  *	-g	Display guid for individual vdev name.
  *	-i	Display vdev initialization status.
+ *	-j	Output json rather than formatted text.
  *	-L	Follow links when resolving vdev path name.
  *	-p	Display values in parsable (exact) format.
  *	-P	Display full path for vdev name.
@@ -9146,7 +9153,7 @@ zpool_do_status(int argc, char **argv)
 	};
 
 	/* check options */
-	while ((c = getopt_long(argc, argv, "c:DegiLpPstT:vx", long_options,
+	while ((c = getopt_long(argc, argv, "c:DegijLpPstT:vx", long_options,
 	    NULL)) != -1) {
 		switch (c) {
 		case 'c':
@@ -9184,6 +9191,9 @@ zpool_do_status(int argc, char **argv)
 			break;
 		case 'i':
 			cb.cb_print_vdev_init = B_TRUE;
+			break;
+		case 'j':
+			cb.cb_print_json = B_TRUE;
 			break;
 		case 'L':
 			cb.cb_name_flags |= VDEV_NAME_FOLLOW_LINKS;
