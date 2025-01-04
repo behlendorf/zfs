@@ -2483,18 +2483,6 @@ vdev_raidz_io_start_read_row(zio_t *zio, raidz_row_t *rr, boolean_t forceparity)
 	vdev_t *vd = zio->io_vd;
 
 	/*
-	 * Calculate how much parity is available for sitting out reads
-	 */
-	int parity_avail = rr->rr_firstdatacol;
-	for (int p = 0; p < rr->rr_firstdatacol; p++) {
-		raidz_col_t *rc = &rr->rr_col[p];
-		if (rc->rc_size > 0 &&
-		    !vdev_readable(vd->vdev_child[rc->rc_devidx])) {
-			parity_avail--;
-		}
-	}
-
-	/*
 	 * Iterate over the columns in reverse order so that we hit the parity
 	 * last -- any errors along the way will force us to read the parity.
 	 */
@@ -2513,19 +2501,6 @@ vdev_raidz_io_start_read_row(zio_t *zio, raidz_row_t *rr, boolean_t forceparity)
 			rc->rc_skipped = 1;
 			continue;
 		}
-		/*
-		 * Check if a data colummn read should be skipped
-		 */
-		if (parity_avail > 0 &&
-		    c >= rr->rr_firstdatacol &&
-		    rr->rr_missingdata == 0 &&
-		    vdev_skip_latency_outlier(cvd, zio->io_flags)) {
-			rr->rr_missingdata++;
-			rc->rc_error = SET_ERROR(EAGAIN);
-			rc->rc_skipped = 1;
-			parity_avail--;
-			continue;
-		}
 		if (vdev_dtl_contains(cvd, DTL_MISSING, zio->io_txg, 1)) {
 			if (c >= rr->rr_firstdatacol)
 				rr->rr_missingdata++;
@@ -2535,6 +2510,40 @@ vdev_raidz_io_start_read_row(zio_t *zio, raidz_row_t *rr, boolean_t forceparity)
 			rc->rc_skipped = 1;
 			continue;
 		}
+
+		if (vdev_skip_latency_outlier(cvd, zio->io_flags)) {
+			rr->rr_noutliers++;
+			rc->rc_latency_outlier = 1;
+		}
+	}
+
+	/*
+	 * When the row contains a latency outlier and sufficient parity
+	 * exists to reconstruct the column data, then skip reading the
+	 * known slow child vdev as a performance optimization.
+	 */
+	if (rr->rr_noutliers > 0 && rr->rr_missingdata == 0 &&
+            (rr->rr_firstdatacol - rr->rr_missingparity) > 0) {
+
+		for (int c = rr->rr_cols - 1; c >= rr->rr_firstdatacol; c--) {
+			raidz_col_t *rc = &rr->rr_col[c];
+
+			if (rc->rc_latency_outlier) {
+				rr->rr_missingdata++;
+				rc->rc_error = SET_ERROR(EAGAIN);
+				rc->rc_skipped = 1;
+				break;
+		        }
+		}
+        }
+
+	for (int c = rr->rr_cols - 1; c >= 0; c--) {
+		raidz_col_t *rc = &rr->rr_col[c];
+		vdev_t *cvd = vd->vdev_child[rc->rc_devidx];
+
+		if (rc->rc_error || rc->rc_size == 0)
+			continue;
+
 		if (forceparity ||
 		    c >= rr->rr_firstdatacol || rr->rr_missingdata > 0 ||
 		    (zio->io_flags & (ZIO_FLAG_SCRUB | ZIO_FLAG_RESILVER))) {
