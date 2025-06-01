@@ -50,6 +50,7 @@
 
 #define _ASM
 #include <sys/asm_linkage.h>
+#include <sys/frame.h>
 
 /* Windows userland links with OpenSSL */
 #if !defined (_WIN32) || defined (_KERNEL)
@@ -378,6 +379,7 @@ FUNCTION(_aesni_ctr32_ghash_6x)
 	RET
 .cfi_endproc
 SET_SIZE(_aesni_ctr32_ghash_6x)
+STACK_FRAME_NON_STANDARD _aesni_ctr32_ghash_6x
 #endif /* ifdef HAVE_MOVBE */
 
 .balign 32
@@ -706,6 +708,7 @@ FUNCTION(_aesni_ctr32_ghash_no_movbe_6x)
 	RET
 .cfi_endproc
 SET_SIZE(_aesni_ctr32_ghash_no_movbe_6x)
+STACK_FRAME_NON_STANDARD _aesni_ctr32_ghash_no_movbe_6x
 
 ENTRY_ALIGN(aesni_gcm_decrypt, 32)
 .cfi_startproc
@@ -823,6 +826,7 @@ ENTRY_ALIGN(aesni_gcm_decrypt, 32)
 	RET
 .cfi_endproc
 SET_SIZE(aesni_gcm_decrypt)
+STACK_FRAME_NON_STANDARD aesni_gcm_decrypt
 
 .balign 32
 FUNCTION(_aesni_ctr32_6x)
@@ -1198,6 +1202,7 @@ ENTRY_ALIGN(aesni_gcm_encrypt, 32)
 	RET
 .cfi_endproc
 SET_SIZE(aesni_gcm_encrypt)
+STACK_FRAME_NON_STANDARD aesni_gcm_encrypt
 
 #endif /* !_WIN32 || _KERNEL */
 

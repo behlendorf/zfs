@@ -33,6 +33,10 @@ extern "C" {
 #endif
 #else
 #define	STACK_FRAME_NON_STANDARD(func)
+#if defined(_ASM)
+.macro STACK_FRAME_NON_STANDARD func:req
+.endm
+#endif
 #endif
 
 #ifdef	__cplusplus

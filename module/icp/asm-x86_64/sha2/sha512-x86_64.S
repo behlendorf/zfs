@@ -24,6 +24,7 @@
 
 #define _ASM
 #include <sys/asm_linkage.h>
+#include <sys/frame.h>
 
 SECTION_STATIC
 
@@ -1463,6 +1464,7 @@ ENTRY_ALIGN(zfs_sha512_transform_x64, 16)
 	RET
 .cfi_endproc
 SET_SIZE(zfs_sha512_transform_x64)
+STACK_FRAME_NON_STANDARD zfs_sha512_transform_x64
 
 ENTRY_ALIGN(zfs_sha512_transform_avx, 64)
 .cfi_startproc
@@ -2627,6 +2629,7 @@ ENTRY_ALIGN(zfs_sha512_transform_avx, 64)
 	RET
 .cfi_endproc
 SET_SIZE(zfs_sha512_transform_avx)
+STACK_FRAME_NON_STANDARD zfs_sha512_transform_avx
 
 ENTRY_ALIGN(zfs_sha512_transform_avx2, 64)
 .cfi_startproc
@@ -4005,6 +4008,7 @@ ENTRY_ALIGN(zfs_sha512_transform_avx2, 64)
 	RET
 .cfi_endproc
 SET_SIZE(zfs_sha512_transform_avx2)
+STACK_FRAME_NON_STANDARD zfs_sha512_transform_avx2
 
 #if defined(__ELF__)
 	.section .note.GNU-stack,"",%progbits
