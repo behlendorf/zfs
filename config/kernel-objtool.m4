@@ -11,10 +11,12 @@ AC_DEFUN([ZFS_AC_KERNEL_OBJTOOL_HEADER], [
 		#include <linux/objtool.h>
 	],[
 	],[
+		objtool_header=$LINUX/include/linux/objtool.h
 		AC_DEFINE(HAVE_KERNEL_OBJTOOL_HEADER, 1,
 		    [kernel has linux/objtool.h])
 		AC_MSG_RESULT(linux/objtool.h)
 	],[
+		objtool_header=$LINUX/include/linux/frame.h
 		AC_MSG_RESULT(linux/frame.h)
 	])
 ])
@@ -59,9 +61,13 @@ AC_DEFUN([ZFS_AC_KERNEL_OBJTOOL], [
 
 		AC_MSG_CHECKING([whether STACK_FRAME_NON_STANDARD is defined])
 		ZFS_LINUX_TEST_RESULT([stack_frame_non_standard], [
-			AC_MSG_RESULT(yes)
-			AC_DEFINE(HAVE_STACK_FRAME_NON_STANDARD, 1,
-			   [STACK_FRAME_NON_STANDARD is defined])
+			AS_IF([$GREP -s -q ".macro STACK_FRAME_NON_STANDARD" $objtool_header], [
+				AC_MSG_RESULT(yes)
+				AC_DEFINE(HAVE_STACK_FRAME_NON_STANDARD, 1,
+				    [STACK_FRAME_NON_STANDARD is defined])
+			], [
+				AC_MSG_RESULT(no)
+			])
 		],[
 			AC_MSG_RESULT(no)
 		])
