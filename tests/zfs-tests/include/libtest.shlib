@@ -1599,7 +1599,6 @@ function create_pool #pool devs_list
 
 	if is_global_zone ; then
 		[[ -d /$pool ]] && rm -rf /$pool
-		echo zpool create -f $pool $@
 		log_must zpool create -f $pool $@
 	fi
 

@@ -59,8 +59,7 @@ function cleanup
 	log_must zinject -c all
 
 	if [[ -n "$child_pids" ]]; then
-		for wait_pid in $child_pids
-		do
+		for wait_pid in $child_pids; do
 		        kill $wait_pid
 		done
 	fi

@@ -91,7 +91,9 @@ for raidtype in raidz raidz2 raidz3 draid1 draid2 draid3 ; do
 	# Wait for us to exit our sit out period
 	log_must wait_sit_out $TESTPOOL2 $BAD_VDEV 10
 
+	# Verify sit_out was cleared during wait_sit_out
 	log_must test "$(get_vdev_prop sit_out $TESTPOOL2 $BAD_VDEV)" == "off"
+
 	destroy_pool $TESTPOOL2
 done
 
