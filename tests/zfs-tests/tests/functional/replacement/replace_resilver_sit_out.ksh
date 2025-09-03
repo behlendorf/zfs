@@ -142,7 +142,7 @@ function replace_test
 DEVSIZE="150M"
 specials_list=""
 i=0
-while [[ $i != 10 ]]; do
+while [[ $i != 12 ]]; do
 	log_must truncate -s $DEVSIZE $TESTDIR/$TESTFILE1.$i
 	specials_list="$specials_list $TESTDIR/$TESTFILE1.$i"
 

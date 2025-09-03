@@ -54,7 +54,7 @@ set_tunable64 SIT_OUT_CHECK_INTERVAL 20
 
 log_must truncate -s 150M $TEST_BASE_DIR/vdev.$$.{0..9}
 
-log_must zpool create $TESTPOOL2 draid2 $TEST_BASE_DIR/vdev.$$.{0..9}
+log_must zpool create $TESTPOOL2 draid2:7 $TEST_BASE_DIR/vdev.$$.{0..9}
 log_must zpool set autosit=on $TESTPOOL2 draid2-0
 log_must dd if=/dev/urandom of=/$TESTPOOL2/bigfile bs=1M count=400
 log_must zpool export $TESTPOOL2
