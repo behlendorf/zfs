@@ -650,16 +650,29 @@ zpl_mmap(struct file *filp, struct vm_area_struct *vma)
 static inline int
 zpl_readpage_common(struct page *pp)
 {
+	struct inode *ip;
+	struct page *pl[1];
+	int error = 0;
 	fstrans_cookie_t cookie;
 
 	ASSERT(PageLocked(pp));
+	ip = pp->mapping->host;
+	pl[0] = pp;
 
 	cookie = spl_fstrans_mark();
-	int error = -zfs_getpage(pp->mapping->host, pp);
+	error = -zfs_getpage(ip, pl, 1);
 	spl_fstrans_unmark(cookie);
 
-	unlock_page(pp);
+	if (error) {
+		SetPageError(pp);
+		ClearPageUptodate(pp);
+	} else {
+		ClearPageError(pp);
+		SetPageUptodate(pp);
+		flush_dcache_page(pp);
+	}
 
+	unlock_page(pp);
 	return (error);
 }
 

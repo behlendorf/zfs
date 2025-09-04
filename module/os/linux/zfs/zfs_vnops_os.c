@@ -244,46 +244,43 @@ zfs_close(struct inode *ip, int flag, cred_t *cr)
 }
 
 #if defined(_KERNEL)
-
-static int zfs_fillpage(struct inode *ip, struct page *pp);
-
 /*
  * When a file is memory mapped, we must keep the IO data synchronized
- * between the DMU cache and the memory mapped pages.  Update all mapped
- * pages with the contents of the coresponding dmu buffer.
+ * between the DMU cache and the memory mapped pages.  What this means:
+ *
+ * On Write:	If we find a memory mapped page, we write to *both*
+ *		the page and the dmu buffer.
  */
 void
 update_pages(znode_t *zp, int64_t start, int len, objset_t *os)
 {
-	struct address_space *mp = ZTOI(zp)->i_mapping;
-	int64_t off = start & (PAGE_SIZE - 1);
+	struct inode *ip = ZTOI(zp);
+	struct address_space *mp = ip->i_mapping;
+	struct page *pp;
+	uint64_t nbytes;
+	int64_t	off;
+	void *pb;
 
+	off = start & (PAGE_SIZE-1);
 	for (start &= PAGE_MASK; len > 0; start += PAGE_SIZE) {
-		uint64_t nbytes = MIN(PAGE_SIZE - off, len);
+		nbytes = MIN(PAGE_SIZE - off, len);
 
-		struct page *pp = find_lock_page(mp, start >> PAGE_SHIFT);
+		pp = find_lock_page(mp, start >> PAGE_SHIFT);
 		if (pp) {
 			if (mapping_writably_mapped(mp))
 				flush_dcache_page(pp);
 
-			void *pb = kmap(pp);
-			int error = dmu_read(os, zp->z_id, start + off,
-			    nbytes, pb + off, DMU_READ_PREFETCH);
+			pb = kmap(pp);
+			(void) dmu_read(os, zp->z_id, start + off, nbytes,
+			    pb + off, DMU_READ_PREFETCH);
 			kunmap(pp);
 
-			if (error) {
-				SetPageError(pp);
-				ClearPageUptodate(pp);
-			} else {
-				ClearPageError(pp);
-				SetPageUptodate(pp);
+			if (mapping_writably_mapped(mp))
+				flush_dcache_page(pp);
 
-				if (mapping_writably_mapped(mp))
-					flush_dcache_page(pp);
-
-				mark_page_accessed(pp);
-			}
-
+			mark_page_accessed(pp);
+			SetPageUptodate(pp);
+			ClearPageError(pp);
 			unlock_page(pp);
 			put_page(pp);
 		}
@@ -294,44 +291,38 @@ update_pages(znode_t *zp, int64_t start, int len, objset_t *os)
 }
 
 /*
- * When a file is memory mapped, we must keep the I/O data synchronized
- * between the DMU cache and the memory mapped pages.  Preferentially read
- * from memory mapped pages, otherwise fallback to reading through the dmu.
+ * When a file is memory mapped, we must keep the IO data synchronized
+ * between the DMU cache and the memory mapped pages.  What this means:
+ *
+ * On Read:	We "read" preferentially from memory mapped pages,
+ *		else we default from the dmu buffer.
+ *
+ * NOTE: We will always "break up" the IO into PAGESIZE uiomoves when
+ *	 the file is memory mapped.
  */
 int
 mappedread(znode_t *zp, int nbytes, zfs_uio_t *uio)
 {
 	struct inode *ip = ZTOI(zp);
 	struct address_space *mp = ip->i_mapping;
-	int64_t start = uio->uio_loffset;
-	int64_t off = start & (PAGE_SIZE - 1);
+	struct page *pp;
+	int64_t	start, off;
+	uint64_t bytes;
 	int len = nbytes;
 	int error = 0;
+	void *pb;
 
+	start = uio->uio_loffset;
+	off = start & (PAGE_SIZE-1);
 	for (start &= PAGE_MASK; len > 0; start += PAGE_SIZE) {
-		uint64_t bytes = MIN(PAGE_SIZE - off, len);
+		bytes = MIN(PAGE_SIZE - off, len);
 
-		struct page *pp = find_lock_page(mp, start >> PAGE_SHIFT);
+		pp = find_lock_page(mp, start >> PAGE_SHIFT);
 		if (pp) {
-			/*
-			 * If filemap_fault() retries there exists a window
-			 * where the page will be unlocked and not up to date.
-			 * In this case we must try and fill the page.
-			 */
-			if (unlikely(!PageUptodate(pp))) {
-				error = zfs_fillpage(ip, pp);
-				if (error) {
-					unlock_page(pp);
-					put_page(pp);
-					return (error);
-				}
-			}
-
-			ASSERT(PageUptodate(pp) || PageDirty(pp));
-
+			ASSERT(PageUptodate(pp));
 			unlock_page(pp);
 
-			void *pb = kmap(pp);
+			pb = kmap(pp);
 			error = zfs_uiomove(pb + off, bytes, UIO_READ, uio);
 			kunmap(pp);
 
@@ -347,11 +338,9 @@ mappedread(znode_t *zp, int nbytes, zfs_uio_t *uio)
 
 		len -= bytes;
 		off = 0;
-
 		if (error)
 			break;
 	}
-
 	return (error);
 }
 #endif /* _KERNEL */
@@ -3817,45 +3806,55 @@ zfs_inactive(struct inode *ip)
  * Fill pages with data from the disk.
  */
 static int
-zfs_fillpage(struct inode *ip, struct page *pp)
+zfs_fillpage(struct inode *ip, struct page *pl[], int nr_pages)
 {
+	znode_t *zp = ITOZ(ip);
 	zfsvfs_t *zfsvfs = ITOZSB(ip);
-	loff_t i_size = i_size_read(ip);
-	u_offset_t io_off = page_offset(pp);
-	size_t io_len = PAGE_SIZE;
+	objset_t *os;
+	struct page *cur_pp;
+	u_offset_t io_off, total;
+	size_t io_len;
+	loff_t i_size;
+	unsigned page_idx;
+	int err;
 
-	ASSERT3U(io_off, <, i_size);
+	os = zfsvfs->z_os;
+	io_len = nr_pages << PAGE_SHIFT;
+	i_size = i_size_read(ip);
+	io_off = page_offset(pl[0]);
 
 	if (io_off + io_len > i_size)
 		io_len = i_size - io_off;
 
-	void *va = kmap(pp);
-	int error = dmu_read(zfsvfs->z_os, ITOZ(ip)->z_id, io_off,
-	    io_len, va, DMU_READ_PREFETCH);
-	if (io_len != PAGE_SIZE)
-		memset((char *)va + io_len, 0, PAGE_SIZE - io_len);
-	kunmap(pp);
+	/*
+	 * Iterate over list of pages and read each page individually.
+	 */
+	page_idx = 0;
+	for (total = io_off + io_len; io_off < total; io_off += PAGESIZE) {
+		caddr_t va;
 
-	if (error) {
-		/* convert checksum errors into IO errors */
-		if (error == ECKSUM)
-			error = SET_ERROR(EIO);
-
-		SetPageError(pp);
-		ClearPageUptodate(pp);
-	} else {
-		ClearPageError(pp);
-		SetPageUptodate(pp);
+		cur_pp = pl[page_idx++];
+		va = kmap(cur_pp);
+		err = dmu_read(os, zp->z_id, io_off, PAGESIZE, va,
+		    DMU_READ_PREFETCH);
+		kunmap(cur_pp);
+		if (err) {
+			/* convert checksum errors into IO errors */
+			if (err == ECKSUM)
+				err = SET_ERROR(EIO);
+			return (err);
+		}
 	}
 
-	return (error);
+	return (0);
 }
 
 /*
- * Uses zfs_fillpage to read data from the file and fill the page.
+ * Uses zfs_fillpage to read data from the file and fill the pages.
  *
  *	IN:	ip	 - inode of file to get data from.
- *		pp	 - page to read
+ *		pl	 - list of pages to read
+ *		nr_pages - number of pages to read
  *
  *	RETURN:	0 on success, error code on failure.
  *
@@ -3864,22 +3863,24 @@ zfs_fillpage(struct inode *ip, struct page *pp)
  */
 /* ARGSUSED */
 int
-zfs_getpage(struct inode *ip, struct page *pp)
+zfs_getpage(struct inode *ip, struct page *pl[], int nr_pages)
 {
+	znode_t	 *zp  = ITOZ(ip);
 	zfsvfs_t *zfsvfs = ITOZSB(ip);
-	znode_t *zp = ITOZ(ip);
-	int error;
+	int	 err;
+
+	if (pl == NULL)
+		return (0);
 
 	ZFS_ENTER(zfsvfs);
 	ZFS_VERIFY_ZP(zp);
 
-	error = zfs_fillpage(ip, pp);
-	if (error == 0)
-		dataset_kstats_update_read_kstats(&zfsvfs->z_kstat, PAGE_SIZE);
+	err = zfs_fillpage(ip, pl, nr_pages);
+
+	dataset_kstats_update_read_kstats(&zfsvfs->z_kstat, nr_pages*PAGESIZE);
 
 	ZFS_EXIT(zfsvfs);
-
-	return (error);
+	return (err);
 }
 
 /*
