@@ -2,6 +2,8 @@ libzfs_la_CFLAGS  = $(AM_CFLAGS) $(LIBRARY_CFLAGS)
 libzfs_la_CFLAGS += $(LIBCRYPTO_CFLAGS) $(ZLIB_CFLAGS)
 libzfs_la_CFLAGS += -fvisibility=hidden
 
+libzfs_la_CPPFLAGS = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS)
+
 lib_LTLIBRARIES += libzfs.la
 CPPCHECKTARGETS += libzfs.la
 

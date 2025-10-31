@@ -31,6 +31,7 @@ scripts_zfs_tests_bin_PROGRAMS += %D%/btree_test
 
 
 scripts_zfs_tests_bin_PROGRAMS += %D%/crypto_test
+%C%_crypto_test_CPPFLAGS = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS)
 %C%_crypto_test_SOURCES = %D%/crypto_test.c
 %C%_crypto_test_LDADD = libzpool.la
 
@@ -43,6 +44,7 @@ endif
 
 
 scripts_zfs_tests_bin_PROGRAMS += %D%/draid
+%C%_draid_CPPFLAGS = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS)
 %C%_draid_CFLAGS = $(AM_CFLAGS) $(ZLIB_CFLAGS)
 %C%_draid_LDADD = \
 	libzpool.la \
@@ -60,7 +62,7 @@ scripts_zfs_tests_bin_PROGRAMS += %D%/file_append %D%/file_check %D%/file_trunc 
 
 
 scripts_zfs_tests_bin_PROGRAMS += %D%/libzfs_input_check
-%C%_libzfs_input_check_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/include/os/@ac_system_l@/zfs
+%C%_libzfs_input_check_CPPFLAGS = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS)
 %C%_libzfs_input_check_LDADD = \
 	libzfs_core.la \
 	libnvpair.la

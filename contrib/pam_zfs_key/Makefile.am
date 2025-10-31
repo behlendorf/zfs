@@ -1,6 +1,8 @@
 %C%_pam_zfs_key_la_CFLAGS  = $(AM_CFLAGS)
 %C%_pam_zfs_key_la_CFLAGS += $(LIBCRYPTO_CFLAGS)
 
+pam_zfs_key_la_CPPFLAGS  = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS)
+
 pammodule_LTLIBRARIES = %D%/pam_zfs_key.la
 
 %C%_pam_zfs_key_la_SOURCES = %D%/pam_zfs_key.c

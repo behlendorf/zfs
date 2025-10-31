@@ -1,7 +1,7 @@
 zpool_CFLAGS  = $(AM_CFLAGS)
 zpool_CFLAGS += $(LIBBLKID_CFLAGS) $(LIBUUID_CFLAGS)
 
-zpool_CPPFLAGS  = $(AM_CPPFLAGS)
+zpool_CPPFLAGS  = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS)
 zpool_CPPFLAGS += -I$(srcdir)/%D%
 
 sbin_PROGRAMS   += zpool

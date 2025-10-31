@@ -2,7 +2,7 @@ libzutil_la_CFLAGS  = $(AM_CFLAGS) $(LIBRARY_CFLAGS)
 libzutil_la_CFLAGS += $(LIBBLKID_CFLAGS) $(LIBUDEV_CFLAGS)
 libzutil_la_CFLAGS += -fvisibility=hidden
 
-libzutil_la_CPPFLAGS  = $(AM_CPPFLAGS)
+libzutil_la_CPPFLAGS  = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS)
 libzutil_la_CPPFLAGS += -I$(srcdir)/%D%
 
 noinst_LTLIBRARIES += libzutil.la

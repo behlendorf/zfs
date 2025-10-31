@@ -3,6 +3,8 @@ include $(srcdir)/%D%/zed.d/Makefile.am
 zed_CFLAGS  = $(AM_CFLAGS)
 zed_CFLAGS += $(LIBUDEV_CFLAGS) $(LIBUUID_CFLAGS)
 
+zed_CPPFLAGS = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS)
+
 sbin_PROGRAMS   += zed
 CPPCHECKTARGETS += zed
 

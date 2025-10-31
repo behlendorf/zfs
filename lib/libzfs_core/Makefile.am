@@ -1,7 +1,7 @@
 libzfs_core_la_CFLAGS  = $(AM_CFLAGS) $(LIBRARY_CFLAGS)
 libzfs_core_la_CFLAGS += -fvisibility=hidden
 
-libzfs_core_la_CPPFLAGS  = $(AM_CPPFLAGS)
+libzfs_core_la_CPPFLAGS  = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS)
 libzfs_core_la_CPPFLAGS += -I$(srcdir)/%D%
 
 lib_LTLIBRARIES += libzfs_core.la
