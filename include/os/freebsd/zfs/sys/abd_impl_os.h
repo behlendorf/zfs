@@ -32,8 +32,14 @@
 extern "C" {
 #endif
 
+#ifdef _KERNEL
 #define	abd_enter_critical(flags)	critical_enter()
 #define	abd_exit_critical(flags)	critical_exit()
+#else
+#else
+#define	abd_enter_critical(flags)	((void)0)
+#define	abd_exit_critical(flags)	((void)0)
+#endif
 
 #ifdef __cplusplus
 }

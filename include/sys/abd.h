@@ -31,10 +31,23 @@
 #include <sys/debug.h>
 #include <sys/zfs_refcount.h>
 #include <sys/uio.h>
-#include <sys/abd_os.h>
 
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+#ifdef _KERNEL
+#include <sys/abd_os.h>
+#else
+struct abd_scatter {
+        uint_t          abd_offset;
+        uint_t          abd_iovcnt;
+        struct iovec    abd_iov[1]; /* actually variable-length */
+};
+
+struct abd_linear {
+        void            *abd_buf;
+};
 #endif
 
 typedef enum abd_flags {

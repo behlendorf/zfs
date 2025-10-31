@@ -23,6 +23,8 @@
 #ifndef _OS_LINUX_ZFS_TRACE_H
 #define	_OS_LINUX_ZFS_TRACE_H
 
+#if defined(_KERNEL)
+
 #include <sys/multilist.h>
 #include <sys/arc_impl.h>
 #include <sys/vdev_impl.h>
@@ -50,5 +52,7 @@
 #include <sys/trace_zil.h>
 #include <sys/trace_zio.h>
 #include <sys/trace_zrlock.h>
+
+#endif
 
 #endif
