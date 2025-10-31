@@ -44,7 +44,6 @@ noinst_HEADERS = \
 	%D%/spl/sys/procfs_list.h \
 	%D%/spl/sys/random.h \
 	%D%/spl/sys/rwlock.h \
-	%D%/spl/sys/sdt.h \
 	%D%/spl/sys/sid.h \
 	%D%/spl/sys/sig.h \
 	%D%/spl/sys/simd.h \
@@ -86,6 +85,7 @@ noinst_HEADERS = \
 	%D%/zfs/sys/zfs_bootenv_os.h \
 	%D%/zfs/sys/zfs_context_os.h \
 	%D%/zfs/sys/zfs_ctldir.h \
+	%D%/zfs/sys/zfs_debug_os.h \
 	%D%/zfs/sys/zfs_dir.h \
 	%D%/zfs/sys/zfs_ioctl_compat.h \
 	%D%/zfs/sys/zfs_vfsops_os.h \

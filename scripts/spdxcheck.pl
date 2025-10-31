@@ -128,7 +128,6 @@ my $untagged_patterns = q(
 	include/os/freebsd/zfs/sys/zpl.h
 	include/os/linux/kernel/linux/page_compat.h
 	lib/libspl/include/sys/string.h
-	lib/libspl/include/sys/trace_spl.h
 	lib/libzdb/libzdb.c
 	lib/libzpool/include/sys/trace_zfs.h
 	module/lua/setjmp/setjmp.S
@@ -260,7 +259,6 @@ my %override_file_license_tags = (
 		include/os/linux/spl/sys/misc.h
 		include/os/linux/spl/sys/procfs_list.h
 		include/os/linux/spl/sys/trace.h
-		include/os/linux/spl/sys/trace_spl.h
 		include/os/linux/spl/sys/trace_taskq.h
 		include/os/linux/spl/sys/wmsum.h
 		module/os/linux/spl/spl-procfs-list.c
