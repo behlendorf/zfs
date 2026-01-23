@@ -3935,6 +3935,9 @@ spa_activity_check(spa_t *spa, uberblock_t *ub, nvlist_t *config,
 	import_expire = gethrtime() + import_delay;
 
 	if (importing) {
+		cmn_err(CE_NOTE, "pool '%s' multihost activity check "
+		    "required, %llu seconds remaining", spa_name(spa),
+		    MAX((u_longlong_t)NSEC2SEC(import_delay), 1));
 		spa_import_progress_set_notes(spa, "Checking MMP activity, "
 		    "waiting %llu ms", (u_longlong_t)NSEC2MSEC(import_delay));
 	}
@@ -3956,6 +3959,8 @@ spa_activity_check(spa_t *spa, uberblock_t *ub, nvlist_t *config,
 
 		if (txg != ub->ub_txg || timestamp != ub->ub_timestamp ||
 		    mmp_seq != (MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0)) {
+			cmn_err(CE_WARN, "pool '%s' multihost activity "
+			    "detected, pool import aborted", spa_name(spa));
 			zfs_dbgmsg("mmp: multihost activity detected, "
 			    "spa=%s txg=%llu ub_txg=%llu "
 			    "timestamp=%llu ub_timestamp=%llu "
