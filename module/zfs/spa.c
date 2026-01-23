@@ -3819,9 +3819,10 @@ spa_activity_check_duration(spa_t *spa, uberblock_t *ub)
 		import_delay = MMP_FAIL_INT(ub) * MSEC2NSEC(MMP_INTERVAL(ub)) *
 		    MMP_IMPORT_SAFETY_FACTOR / 100;
 
-		zfs_dbgmsg("fail_intvals>0 import_delay=%llu ub_mmp "
-		    "mmp_fails=%llu ub_mmp mmp_interval=%llu "
-		    "import_intervals=%llu", (u_longlong_t)import_delay,
+		zfs_dbgmsg("mmp: settings spa=%s fail_intvals>0 "
+		    "import_delay=%llu mmp_fails=%llu mmp_interval=%llu "
+		    "import_intervals=%llu", spa_name(spa),
+		    (u_longlong_t)import_delay,
 		    (u_longlong_t)MMP_FAIL_INT(ub),
 		    (u_longlong_t)MMP_INTERVAL(ub),
 		    (u_longlong_t)import_intervals);
@@ -3833,9 +3834,10 @@ spa_activity_check_duration(spa_t *spa, uberblock_t *ub)
 		import_delay = MAX(import_delay, (MSEC2NSEC(MMP_INTERVAL(ub)) +
 		    ub->ub_mmp_delay) * import_intervals);
 
-		zfs_dbgmsg("fail_intvals=0 import_delay=%llu ub_mmp "
-		    "mmp_interval=%llu ub_mmp_delay=%llu "
-		    "import_intervals=%llu", (u_longlong_t)import_delay,
+		zfs_dbgmsg("mmp: settings spa=%s fail_intvals=0 "
+		    "import_delay=%llu mmp_interval=%llu ub_mmp_delay=%llu "
+		    "import_intervals=%llu", spa_name(spa),
+		    (u_longlong_t)import_delay,
 		    (u_longlong_t)MMP_INTERVAL(ub),
 		    (u_longlong_t)ub->ub_mmp_delay,
 		    (u_longlong_t)import_intervals);
@@ -3848,17 +3850,18 @@ spa_activity_check_duration(spa_t *spa, uberblock_t *ub)
 		import_delay = MAX(import_delay, (multihost_interval +
 		    ub->ub_mmp_delay) * import_intervals);
 
-		zfs_dbgmsg("import_delay=%llu ub_mmp_delay=%llu "
-		    "import_intervals=%llu leaves=%u",
-		    (u_longlong_t)import_delay,
+		zfs_dbgmsg("mmp: settings spa=%s import_delay=%llu "
+		    "ub_mmp_delay=%llu import_intervals=%llu leaves=%u",
+		    spa_name(spa), (u_longlong_t)import_delay,
 		    (u_longlong_t)ub->ub_mmp_delay,
 		    (u_longlong_t)import_intervals,
 		    vdev_count_leaves(spa));
 	} else {
 		/* Using local tunings is the only reasonable option */
-		zfs_dbgmsg("pool last imported on non-MMP aware "
-		    "host using import_delay=%llu multihost_interval=%llu "
-		    "import_intervals=%llu", (u_longlong_t)import_delay,
+		zfs_dbgmsg("mmp: pool last imported on non-MMP aware "
+		    "host using settings spa=%s import_delay=%llu "
+		    "multihost_interval=%llu import_intervals=%llu",
+		    spa_name(spa), (u_longlong_t)import_delay,
 		    (u_longlong_t)multihost_interval,
 		    (u_longlong_t)import_intervals);
 	}
@@ -3943,10 +3946,11 @@ spa_activity_check(spa_t *spa, uberblock_t *ub, nvlist_t *config,
 
 		if (txg != ub->ub_txg || timestamp != ub->ub_timestamp ||
 		    mmp_seq != (MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0)) {
-			zfs_dbgmsg("multihost activity detected "
-			    "txg %llu ub_txg  %llu "
-			    "timestamp %llu ub_timestamp  %llu "
-			    "mmp_config %#llx ub_mmp_config %#llx",
+			zfs_dbgmsg("mmp: multihost activity detected, "
+			    "spa=%s txg=%llu ub_txg=%llu "
+			    "timestamp=%llu ub_timestamp=%llu "
+			    "mmp_config=%#llx ub_mmp_config=%#llx",
+			    spa_name(spa),
 			    (u_longlong_t)txg, (u_longlong_t)ub->ub_txg,
 			    (u_longlong_t)timestamp,
 			    (u_longlong_t)ub->ub_timestamp,
@@ -4055,8 +4059,9 @@ spa_mmp_remote_host_activity(spa_t *spa)
 
 	if (best_ub.ub_txg != spa->spa_uberblock.ub_txg ||
 	    best_ub.ub_timestamp != spa->spa_uberblock.ub_timestamp) {
-		zfs_dbgmsg("txg mismatch detected during pool clear "
-		    "txg %llu ub_txg %llu timestamp %llu ub_timestamp %llu",
+		zfs_dbgmsg("mmp: txg mismatch detected during pool clear, "
+		    "spa=%s txg=%llu ub_txg=%llu timestamp=%llu "
+		    "ub_timestamp=%llu", spa_name(spa),
 		    (u_longlong_t)spa->spa_uberblock.ub_txg,
 		    (u_longlong_t)best_ub.ub_txg,
 		    (u_longlong_t)spa->spa_uberblock.ub_timestamp,
