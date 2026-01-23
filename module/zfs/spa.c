@@ -3719,6 +3719,56 @@ vdev_count_verify_zaps(vdev_t *vd)
 #endif
 
 /*
+ * Check if the ZPOOL_CONFIG_MMP_STATE, ZPOOL_CONFIG_MMP_TXG,
+ * ZPOOL_CONFIG_TIMESTAMP and ZPOOL_CONFIG_MMP_SEQ values which are set
+ * by an earlier tryimport match the loaded uberblock.  If they do
+ * then the pool has not changed between the tryimport and real import.
+ */
+static int
+spa_activity_check_tryconfig(uberblock_t *ub, nvlist_t *config)
+{
+	uint64_t tryconfig_mmp_state = MMP_STATE_ACTIVE;
+	uint64_t tryconfig_txg = 0;
+	uint64_t tryconfig_timestamp = 0;
+	uint16_t tryconfig_mmp_seq = 0;
+	nvlist_t *nvinfo;
+	int error;
+
+	error = nvlist_lookup_nvlist(config, ZPOOL_CONFIG_LOAD_INFO, &nvinfo);
+	if (error)
+		return (error);
+
+	error = nvlist_lookup_uint64(nvinfo, ZPOOL_CONFIG_MMP_STATE,
+	    &tryconfig_mmp_state);
+	if (error)
+		return (error);
+
+	error = nvlist_lookup_uint64(nvinfo, ZPOOL_CONFIG_MMP_TXG,
+	    &tryconfig_txg);
+	if (error)
+		return (error);
+
+	error = nvlist_lookup_uint64(config, ZPOOL_CONFIG_TIMESTAMP,
+	    &tryconfig_timestamp);
+	if (error)
+		return (error);
+
+	error = nvlist_lookup_uint16(nvinfo, ZPOOL_CONFIG_MMP_SEQ,
+	    &tryconfig_mmp_seq);
+	if (error)
+		return (error);
+
+	if (tryconfig_mmp_state == MMP_STATE_INACTIVE &&
+	    tryconfig_txg && tryconfig_txg == ub->ub_txg &&
+	    tryconfig_timestamp && tryconfig_timestamp == ub->ub_timestamp &&
+	    tryconfig_mmp_seq && tryconfig_mmp_seq ==
+	    (MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0)) {
+		return (0);
+
+	return (EINVAL);
+}
+
+/*
  * Determine whether the activity check is required.
  */
 static boolean_t
@@ -3727,24 +3777,11 @@ spa_activity_check_required(spa_t *spa, uberblock_t *ub, nvlist_t *label,
 {
 	uint64_t state = POOL_STATE_ACTIVE;
 	uint64_t hostid = 0;
-	uint64_t tryconfig_txg = 0;
-	uint64_t tryconfig_timestamp = 0;
-	uint16_t tryconfig_mmp_seq = 0;
-	nvlist_t *nvinfo;
-
-	if (nvlist_exists(config, ZPOOL_CONFIG_LOAD_INFO)) {
-		nvinfo = fnvlist_lookup_nvlist(config, ZPOOL_CONFIG_LOAD_INFO);
-		(void) nvlist_lookup_uint64(nvinfo, ZPOOL_CONFIG_MMP_TXG,
-		    &tryconfig_txg);
-		(void) nvlist_lookup_uint64(config, ZPOOL_CONFIG_TIMESTAMP,
-		    &tryconfig_timestamp);
-		(void) nvlist_lookup_uint16(nvinfo, ZPOOL_CONFIG_MMP_SEQ,
-		    &tryconfig_mmp_seq);
-	}
 
 	/*
 	 * Disable the MMP activity check - This is used by zdb which
-	 * is intended to be used on potentially active pools.
+	 * is always read-only and intended to be used on potentially
+	 * active pools.
 	 */
 	if (spa->spa_import_flags & ZFS_IMPORT_SKIP_MMP) {
 		zfs_dbgmsg("mmp: skipping check ZFS_IMPORT_SKIP_MMP is set, "
@@ -3757,21 +3794,6 @@ spa_activity_check_required(spa_t *spa, uberblock_t *ub, nvlist_t *label,
 	 */
 	if (ub->ub_mmp_magic == MMP_MAGIC && ub->ub_mmp_delay == 0) {
 		zfs_dbgmsg("mmp: skipping check: feature is disabled, "
-		    "spa=%s", spa_name(spa));
-		return (B_FALSE);
-	}
-
-	/*
-	 * If the tryconfig_ values are nonzero, they are the results of an
-	 * earlier tryimport.  If they all match the uberblock we just found,
-	 * then the pool has not changed and we return false so we do not test
-	 * a second time.
-	 */
-	if (tryconfig_txg && tryconfig_txg == ub->ub_txg &&
-	    tryconfig_timestamp && tryconfig_timestamp == ub->ub_timestamp &&
-	    tryconfig_mmp_seq && tryconfig_mmp_seq ==
-	    (MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0)) {
-		zfs_dbgmsg("mmp: skipping check: tryconfig values match, "
 		    "spa=%s", spa_name(spa));
 		return (B_FALSE);
 	}
@@ -4346,6 +4368,7 @@ static int
 spa_ld_select_uberblock(spa_t *spa, spa_import_type_t type)
 {
 	vdev_t *rvd = spa->spa_root_vdev;
+	nvlist_t *config = spa->spa_config;
 	nvlist_t *label;
 	uberblock_t *ub = &spa->spa_uberblock;
 	boolean_t activity_check = B_FALSE;
@@ -4400,15 +4423,15 @@ spa_ld_select_uberblock(spa_t *spa, spa_import_type_t type)
 		    (u_longlong_t)RRSS_GET_OFFSET(ub));
 	}
 
-
 	/*
 	 * For pools which have the multihost property on determine if the
 	 * pool is truly inactive and can be safely imported.  Prevent
 	 * hosts which don't have a hostid set from importing the pool.
 	 */
-	activity_check = spa_activity_check_required(spa, ub, label,
-	    spa->spa_config);
+	activity_check = spa_activity_check_required(spa, ub, label, config);
 	if (activity_check) {
+		int error;
+
 		if (ub->ub_mmp_magic == MMP_MAGIC && ub->ub_mmp_delay &&
 		    spa_get_hostid(spa) == 0) {
 			nvlist_free(label);
@@ -4417,20 +4440,33 @@ spa_ld_select_uberblock(spa_t *spa, spa_import_type_t type)
 			return (spa_vdev_err(rvd, VDEV_AUX_ACTIVE, EREMOTEIO));
 		}
 
-		int error =
-		    spa_activity_check(spa, ub, spa->spa_config, B_TRUE);
-		if (error) {
-			nvlist_free(label);
-			return (error);
-		}
+		error = spa_activity_check_tryconfig(ub, config);
+		if (error == 0) {
+			spa_load_note(spa, "using mmp tryimport "
+			    "state=%d ub_txg=%llu ub_seq=%u",
+			    MMP_STATE_INACTIVE, (u_longlong_t)ub->ub_txg,
+			    (unsigned)(MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0));
+		} else {
+			error = spa_activity_check(spa, ub, config, B_TRUE);
+			if (error) {
+				nvlist_free(label);
+				spa_load_failed(spa, "mmp activity check "
+				    "failed error=%d", error);
+				return (error);
+			}
 
-		fnvlist_add_uint64(spa->spa_load_info,
-		    ZPOOL_CONFIG_MMP_STATE, MMP_STATE_INACTIVE);
-		fnvlist_add_uint64(spa->spa_load_info,
-		    ZPOOL_CONFIG_MMP_TXG, ub->ub_txg);
-		fnvlist_add_uint16(spa->spa_load_info,
-		    ZPOOL_CONFIG_MMP_SEQ,
-		    (MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0));
+			fnvlist_add_uint64(spa->spa_load_info,
+			    ZPOOL_CONFIG_MMP_STATE, MMP_STATE_INACTIVE);
+			fnvlist_add_uint64(spa->spa_load_info,
+			    ZPOOL_CONFIG_MMP_TXG, ub->ub_txg);
+			fnvlist_add_uint16(spa->spa_load_info,
+			    ZPOOL_CONFIG_MMP_SEQ,
+			    (MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0));
+			spa_load_note(spa, "added mmp tryimport state=%d "
+			    "ub_txg=%llu ub_seq=%u", MMP_STATE_INACTIVE,
+			    (u_longlong_t)ub->ub_txg,
+			    (unsigned)(MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0));
+		}
 	}
 
 	/*
