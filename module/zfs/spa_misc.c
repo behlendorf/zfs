@@ -414,7 +414,7 @@ spa_load_failed(spa_t *spa, const char *fmt, ...)
 	(void) vsnprintf(buf, sizeof (buf), fmt, adx);
 	va_end(adx);
 
-	zfs_dbgmsg("spa_load(%s, config %s): FAILED: %s", spa->spa_name,
+	zfs_dbgmsg("spa_load(%s, config %s): FAILED: %s", spa_load_name(spa),
 	    spa->spa_trust_config ? "trusted" : "untrusted", buf);
 }
 
@@ -428,7 +428,7 @@ spa_load_note(spa_t *spa, const char *fmt, ...)
 	(void) vsnprintf(buf, sizeof (buf), fmt, adx);
 	va_end(adx);
 
-	zfs_dbgmsg("spa_load(%s, config %s): %s", spa->spa_name,
+	zfs_dbgmsg("spa_load(%s, config %s): %s", spa_load_name(spa),
 	    spa->spa_trust_config ? "trusted" : "untrusted", buf);
 
 	spa_import_progress_set_notes_nolog(spa, "%s", buf);
@@ -1818,6 +1818,19 @@ spa_name(spa_t *spa)
 	return (spa->spa_name);
 }
 
+char *
+spa_load_name(spa_t *spa)
+{
+	/*
+	 * During spa_tryimport() the pool name includes a unique prefix.
+	 * Returns the original name which can be used for log messages.
+	 */
+	if (spa->spa_load_name)
+		return (spa->spa_load_name);
+
+	return (spa->spa_name);
+}
+
 uint64_t
 spa_guid(spa_t *spa)
 {
@@ -3144,6 +3157,7 @@ EXPORT_SYMBOL(spa_set_rootblkptr);
 EXPORT_SYMBOL(spa_altroot);
 EXPORT_SYMBOL(spa_sync_pass);
 EXPORT_SYMBOL(spa_name);
+EXPORT_SYMBOL(spa_load_name);
 EXPORT_SYMBOL(spa_guid);
 EXPORT_SYMBOL(spa_last_synced_txg);
 EXPORT_SYMBOL(spa_first_txg);

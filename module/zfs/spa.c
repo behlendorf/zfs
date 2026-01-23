@@ -3784,7 +3784,7 @@ spa_activity_check_required(spa_t *spa, uberblock_t *ub, nvlist_t *label,
 	 */
 	if (spa->spa_import_flags & ZFS_IMPORT_SKIP_MMP) {
 		zfs_dbgmsg("mmp: skipping check ZFS_IMPORT_SKIP_MMP is set, "
-		    "spa=%s", spa_name(spa));
+		    "spa=%s", spa_load_name(spa));
 		return (B_FALSE);
 	}
 
@@ -3793,7 +3793,7 @@ spa_activity_check_required(spa_t *spa, uberblock_t *ub, nvlist_t *label,
 	 */
 	if (ub->ub_mmp_magic == MMP_MAGIC && ub->ub_mmp_delay == 0) {
 		zfs_dbgmsg("mmp: skipping check: feature is disabled, "
-		    "spa=%s", spa_name(spa));
+		    "spa=%s", spa_load_name(spa));
 		return (B_FALSE);
 	}
 
@@ -3813,7 +3813,7 @@ spa_activity_check_required(spa_t *spa, uberblock_t *ub, nvlist_t *label,
 	    state == POOL_STATE_EXPORTED) {
 		zfs_dbgmsg("mmp: skipping check: hostid matches and pool is "
 		    "exported, spa=%s, hostid=%llx",
-		    spa_name(spa), (u_longlong_t)hostid);
+		    spa_load_name(spa), (u_longlong_t)hostid);
 		return (B_FALSE);
 	}
 
@@ -3852,7 +3852,7 @@ spa_activity_check_duration(spa_t *spa, uberblock_t *ub)
 
 		zfs_dbgmsg("mmp: settings spa=%s fail_intvals>0 "
 		    "import_delay=%llu mmp_fails=%llu mmp_interval=%llu "
-		    "import_intervals=%llu", spa_name(spa),
+		    "import_intervals=%llu", spa_load_name(spa),
 		    (u_longlong_t)import_delay,
 		    (u_longlong_t)MMP_FAIL_INT(ub),
 		    (u_longlong_t)MMP_INTERVAL(ub),
@@ -3867,7 +3867,7 @@ spa_activity_check_duration(spa_t *spa, uberblock_t *ub)
 
 		zfs_dbgmsg("mmp: settings spa=%s fail_intvals=0 "
 		    "import_delay=%llu mmp_interval=%llu ub_mmp_delay=%llu "
-		    "import_intervals=%llu", spa_name(spa),
+		    "import_intervals=%llu", spa_load_name(spa),
 		    (u_longlong_t)import_delay,
 		    (u_longlong_t)MMP_INTERVAL(ub),
 		    (u_longlong_t)ub->ub_mmp_delay,
@@ -3883,7 +3883,7 @@ spa_activity_check_duration(spa_t *spa, uberblock_t *ub)
 
 		zfs_dbgmsg("mmp: settings spa=%s import_delay=%llu "
 		    "ub_mmp_delay=%llu import_intervals=%llu leaves=%u",
-		    spa_name(spa), (u_longlong_t)import_delay,
+		    spa_load_name(spa), (u_longlong_t)import_delay,
 		    (u_longlong_t)ub->ub_mmp_delay,
 		    (u_longlong_t)import_intervals,
 		    vdev_count_leaves(spa));
@@ -3892,7 +3892,7 @@ spa_activity_check_duration(spa_t *spa, uberblock_t *ub)
 		zfs_dbgmsg("mmp: pool last imported on non-MMP aware "
 		    "host using settings spa=%s import_delay=%llu "
 		    "multihost_interval=%llu import_intervals=%llu",
-		    spa_name(spa), (u_longlong_t)import_delay,
+		    spa_load_name(spa), (u_longlong_t)import_delay,
 		    (u_longlong_t)multihost_interval,
 		    (u_longlong_t)import_intervals);
 	}
@@ -3957,7 +3957,7 @@ spa_activity_check(spa_t *spa, uberblock_t *ub, nvlist_t *config,
 
 	if (importing) {
 		cmn_err(CE_NOTE, "pool '%s' multihost activity check "
-		    "required, %llu seconds remaining", spa_name(spa),
+		    "required, %llu seconds remaining", spa_load_name(spa),
 		    MAX((u_longlong_t)NSEC2SEC(import_delay), 1));
 		spa_import_progress_set_notes(spa, "Checking MMP activity, "
 		    "waiting %llu ms", (u_longlong_t)NSEC2MSEC(import_delay));
@@ -3981,12 +3981,13 @@ spa_activity_check(spa_t *spa, uberblock_t *ub, nvlist_t *config,
 		if (txg != ub->ub_txg || timestamp != ub->ub_timestamp ||
 		    mmp_seq != (MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0)) {
 			cmn_err(CE_WARN, "pool '%s' multihost activity "
-			    "detected, pool import aborted", spa_name(spa));
+			    "detected, pool import aborted",
+			    spa_load_name(spa));
 			zfs_dbgmsg("mmp: multihost activity detected, "
 			    "spa=%s txg=%llu ub_txg=%llu "
 			    "timestamp=%llu ub_timestamp=%llu "
 			    "mmp_config=%#llx ub_mmp_config=%#llx",
-			    spa_name(spa),
+			    spa_load_name(spa),
 			    (u_longlong_t)txg, (u_longlong_t)ub->ub_txg,
 			    (u_longlong_t)timestamp,
 			    (u_longlong_t)ub->ub_timestamp,
@@ -7185,6 +7186,10 @@ spa_tryimport(nvlist_t *tryconfig)
 	spa_activate(spa, SPA_MODE_READ);
 	kmem_free(name, MAXPATHLEN);
 
+	spa->spa_load_name = strrchr(spa->spa_name, '-');
+	if (spa->spa_load_name)
+		spa->spa_load_name++;
+
 	/*
 	 * Rewind pool if a max txg was provided.
 	 */
@@ -7193,9 +7198,9 @@ spa_tryimport(nvlist_t *tryconfig)
 		spa->spa_load_max_txg = policy.zlp_txg;
 		spa->spa_extreme_rewind = B_TRUE;
 		zfs_dbgmsg("spa_tryimport: importing %s, max_txg=%lld",
-		    poolname, (longlong_t)policy.zlp_txg);
+		    spa_load_name(spa), (longlong_t)policy.zlp_txg);
 	} else {
-		zfs_dbgmsg("spa_tryimport: importing %s", poolname);
+		zfs_dbgmsg("spa_tryimport: importing %s", spa_load_name(spa));
 	}
 
 	if (nvlist_lookup_string(tryconfig, ZPOOL_CONFIG_CACHEFILE, &cachefile)
@@ -7223,7 +7228,8 @@ spa_tryimport(nvlist_t *tryconfig)
 	 */
 	if (spa->spa_root_vdev != NULL) {
 		config = spa_config_generate(spa, NULL, -1ULL, B_TRUE);
-		fnvlist_add_string(config, ZPOOL_CONFIG_POOL_NAME, poolname);
+		fnvlist_add_string(config, ZPOOL_CONFIG_POOL_NAME,
+		    spa_load_name(spa));
 		fnvlist_add_uint64(config, ZPOOL_CONFIG_POOL_STATE, state);
 		fnvlist_add_uint64(config, ZPOOL_CONFIG_TIMESTAMP,
 		    spa->spa_uberblock.ub_timestamp);
@@ -7257,7 +7263,7 @@ spa_tryimport(nvlist_t *tryconfig)
 					    MAXPATHLEN);
 				} else {
 					(void) snprintf(dsname, MAXPATHLEN,
-					    "%s/%s", poolname, ++cp);
+					    "%s/%s", spa_load_name(spa), ++cp);
 				}
 				fnvlist_add_string(config, ZPOOL_CONFIG_BOOTFS,
 				    dsname);
@@ -9601,7 +9607,7 @@ spa_async_dispatch(spa_t *spa)
 void
 spa_async_request(spa_t *spa, int task)
 {
-	zfs_dbgmsg("spa=%s async request task=%u", spa->spa_name, task);
+	zfs_dbgmsg("spa=%s async request task=%u", spa_load_name(spa), task);
 	mutex_enter(&spa->spa_async_lock);
 	spa->spa_async_tasks |= task;
 	mutex_exit(&spa->spa_async_lock);
