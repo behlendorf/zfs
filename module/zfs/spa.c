@@ -3761,8 +3761,7 @@ spa_activity_check_tryconfig(uberblock_t *ub, nvlist_t *config)
 	if (tryconfig_mmp_state == MMP_STATE_INACTIVE &&
 	    tryconfig_txg && tryconfig_txg == ub->ub_txg &&
 	    tryconfig_timestamp && tryconfig_timestamp == ub->ub_timestamp &&
-	    tryconfig_mmp_seq && tryconfig_mmp_seq ==
-	    (MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0)) {
+	    MMP_SEQ_VALID(ub) && tryconfig_mmp_seq == MMP_SEQ(ub))
 		return (0);
 
 	return (EINVAL);
