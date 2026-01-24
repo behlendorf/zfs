@@ -3719,61 +3719,94 @@ vdev_count_verify_zaps(vdev_t *vd)
 #endif
 
 /*
- * Check if the ZPOOL_CONFIG_MMP_STATE, ZPOOL_CONFIG_MMP_TXG,
- * ZPOOL_CONFIG_TIMESTAMP and ZPOOL_CONFIG_MMP_SEQ values which are set
- * by an earlier tryimport match the loaded uberblock.  If they do
- * then the pool has not changed between the tryimport and real import.
+ * Check the results load_info results from previous tryimport.
+ *
+ * error results:
+ *          0 - Pool remains in an idle state
+ *  EREMOTEIO - Pool was known to be active on the other host
+ *     ENOENT - The config does not contain complete tryimport info
  */
 static int
-spa_activity_check_tryconfig(uberblock_t *ub, nvlist_t *config)
+spa_activity_verify_config(spa_t *spa, uberblock_t *ub)
 {
 	uint64_t tryconfig_mmp_state = MMP_STATE_ACTIVE;
 	uint64_t tryconfig_txg = 0;
 	uint64_t tryconfig_timestamp = 0;
 	uint16_t tryconfig_mmp_seq = 0;
-	nvlist_t *nvinfo;
+	nvlist_t *nvinfo, *config = spa->spa_config;
 	int error;
 
 	error = nvlist_lookup_nvlist(config, ZPOOL_CONFIG_LOAD_INFO, &nvinfo);
 	if (error)
-		return (error);
+		return (SET_ERROR(ENOENT));
 
+	/*
+	 * If ZPOOL_CONFIG_MMP_STATE is present an activity check was performed
+	 * during the earlier tryimport.  If the state recorder there isn't
+	 * MMP_STATE_INACTIVE the pool is known to be active on another host.
+	 */
 	error = nvlist_lookup_uint64(nvinfo, ZPOOL_CONFIG_MMP_STATE,
 	    &tryconfig_mmp_state);
 	if (error)
-		return (error);
+		return (SET_ERROR(ENOENT));
 
+	if (tryconfig_mmp_state != MMP_STATE_INACTIVE) {
+		spa_load_failed(spa, "pool is active on remote host, "
+		    "state=%llu", (u_longlong_t)tryconfig_mmp_state);
+		return (SET_ERROR(EREMOTEIO));
+	}
+
+	/*
+	 * If ZPOOL_CONFIG_MMP_TXG is present an activity check was performed
+	 * during the earlier tryimport.  If the txg recorded there is 0 then
+	 * the pool is known to be active on another host.
+	 */
 	error = nvlist_lookup_uint64(nvinfo, ZPOOL_CONFIG_MMP_TXG,
 	    &tryconfig_txg);
 	if (error)
-		return (error);
+		return (SET_ERROR(ENOENT));
+
+	if (tryconfig_txg == 0) {
+		spa_load_failed(spa, "pool is active on remote host, "
+		    "tryconfig_txg=%llu", (u_longlong_t)tryconfig_txg);
+		return (SET_ERROR(EREMOTEIO));
+	}
 
 	error = nvlist_lookup_uint64(config, ZPOOL_CONFIG_TIMESTAMP,
 	    &tryconfig_timestamp);
 	if (error)
-		return (error);
+		return (SET_ERROR(ENOENT));
 
 	error = nvlist_lookup_uint16(nvinfo, ZPOOL_CONFIG_MMP_SEQ,
 	    &tryconfig_mmp_seq);
 	if (error)
-		return (error);
+		return (SET_ERROR(ENOENT));
 
-	if (tryconfig_mmp_state == MMP_STATE_INACTIVE &&
-	    tryconfig_txg && tryconfig_txg == ub->ub_txg &&
-	    tryconfig_timestamp && tryconfig_timestamp == ub->ub_timestamp &&
-	    MMP_SEQ_VALID(ub) && tryconfig_mmp_seq == MMP_SEQ(ub))
+	if (tryconfig_timestamp == ub->ub_timestamp &&
+	    tryconfig_txg == ub->ub_txg &&
+	    MMP_SEQ_VALID(ub) && tryconfig_mmp_seq == MMP_SEQ(ub)) {
+		spa_load_note(spa, "verified pool mmp tryimport config");
 		return (0);
+	}
 
-	return (EINVAL);
+	spa_load_failed(spa, "pool is active tryconfig differs, "
+	    "tc_timestamp=%llu ub_timestamp=%llu "
+	    "tc_txg_txg=%llu ub_txg=%llu "
+	    "tc_seq=%llu ub_seq=%llu",
+	    (u_longlong_t)tryconfig_timestamp, (u_longlong_t)ub->ub_timestamp,
+	    (u_longlong_t)tryconfig_txg, (u_longlong_t)ub->ub_txg,
+	    (u_longlong_t)tryconfig_mmp_seq, (u_longlong_t)MMP_SEQ(ub));
+
+	return (SET_ERROR(EREMOTEIO));
 }
 
 /*
  * Determine whether the activity check is required.
  */
 static boolean_t
-spa_activity_check_required(spa_t *spa, uberblock_t *ub, nvlist_t *label,
-    nvlist_t *config)
+spa_activity_check_required(spa_t *spa, uberblock_t *ub, nvlist_t *label)
 {
+	nvlist_t *config = spa->spa_config;
 	uint64_t state = POOL_STATE_ACTIVE;
 	uint64_t hostid = 0;
 
@@ -3803,18 +3836,22 @@ spa_activity_check_required(spa_t *spa, uberblock_t *ub, nvlist_t *label,
 	 * hostid from configuration may be stale use the one read from the
 	 * label.  Imports from other hostids must perform the activity check.
 	 */
-	if (nvlist_exists(label, ZPOOL_CONFIG_HOSTID))
-		hostid = fnvlist_lookup_uint64(label, ZPOOL_CONFIG_HOSTID);
+	if (label != NULL) {
+		if (nvlist_exists(label, ZPOOL_CONFIG_HOSTID))
+			hostid = fnvlist_lookup_uint64(label,
+			    ZPOOL_CONFIG_HOSTID);
 
-	if (nvlist_exists(config, ZPOOL_CONFIG_POOL_STATE))
-		state = fnvlist_lookup_uint64(config, ZPOOL_CONFIG_POOL_STATE);
+		if (nvlist_exists(config, ZPOOL_CONFIG_POOL_STATE))
+			state = fnvlist_lookup_uint64(config,
+			    ZPOOL_CONFIG_POOL_STATE);
 
-	if (spa_get_hostid(spa) && hostid == spa_get_hostid(spa) &&
-	    state == POOL_STATE_EXPORTED) {
-		zfs_dbgmsg("mmp: skipping check: hostid matches and pool is "
-		    "exported, spa=%s, hostid=%llx",
-		    spa_load_name(spa), (u_longlong_t)hostid);
-		return (B_FALSE);
+		if (spa_get_hostid(spa) && hostid == spa_get_hostid(spa) &&
+		    state == POOL_STATE_EXPORTED) {
+			zfs_dbgmsg("mmp: skipping check: hostid matches "
+			    "and pool is exported, spa=%s, hostid=%llx",
+			    spa_load_name(spa), (u_longlong_t)hostid);
+			return (B_FALSE);
+		}
 	}
 
 	return (B_TRUE);
@@ -3901,7 +3938,101 @@ spa_activity_check_duration(spa_t *spa, uberblock_t *ub)
 }
 
 /*
- * Remote host activity check.
+ * If the pool is determined to be active store the status in the
+ * spa->spa_load_info nvlist.  If the remote hostname or hostid are
+ * available from configuration read from disk store them as well.
+ * This allows 'zpool import' to generate a more useful message.
+ *
+ * ZPOOL_CONFIG_MMP_STATE    - observed pool status (mandatory)
+ * ZPOOL_CONFIG_MMP_HOSTNAME - hostname from the active pool
+ * ZPOOL_CONFIG_MMP_HOSTID   - hostid from the active pool
+ */
+static void
+spa_activity_set_load_info(spa_t *spa, nvlist_t *label, mmp_state_t state,
+    uint64_t txg, uint16_t seq)
+{
+	const char *hostname = NULL;
+	uint64_t hostid = 0;
+
+	if (label) {
+		if (nvlist_exists(label, ZPOOL_CONFIG_HOSTNAME)) {
+			hostname = fnvlist_lookup_string(label,
+			    ZPOOL_CONFIG_HOSTNAME);
+			fnvlist_add_string(spa->spa_load_info,
+			    ZPOOL_CONFIG_MMP_HOSTNAME, hostname);
+		}
+
+		if (nvlist_exists(label, ZPOOL_CONFIG_HOSTID)) {
+			hostid = fnvlist_lookup_uint64(label,
+			    ZPOOL_CONFIG_HOSTID);
+			fnvlist_add_uint64(spa->spa_load_info,
+			    ZPOOL_CONFIG_MMP_HOSTID, hostid);
+		}
+	}
+
+	fnvlist_add_uint64(spa->spa_load_info, ZPOOL_CONFIG_MMP_STATE, state);
+	fnvlist_add_uint64(spa->spa_load_info, ZPOOL_CONFIG_MMP_TXG, txg);
+	fnvlist_add_uint16(spa->spa_load_info, ZPOOL_CONFIG_MMP_SEQ, seq);
+
+	spa_load_note(spa, "set mmp spa_load_info, hostname=%s hostid=%llx "
+	    "state=%d txg=%llu seq=%llu", hostname != NULL ? hostname : "none",
+	    (u_longlong_t)hostid, (int)state, (u_longlong_t)txg,
+	    (u_longlong_t)seq);
+}
+
+/*
+ * Compares the txg, sequence, and timestamp of two uberblocks while
+ * ignoring other differences.
+ */
+static int
+spa_activity_compare_uberblock(spa_t *spa, uberblock_t *spa_ub,
+    uberblock_t *mmp_ub)
+{
+	uint16_t spa_ub_seq = MMP_SEQ_VALID(spa_ub) ? MMP_SEQ(spa_ub) : 0;
+	uint16_t mmp_ub_seq = MMP_SEQ_VALID(mmp_ub) ? MMP_SEQ(mmp_ub) : 0;
+
+	if (spa_ub->ub_txg == mmp_ub->ub_txg && spa_ub_seq == mmp_ub_seq &&
+	    spa_ub->ub_timestamp == mmp_ub->ub_timestamp)
+		return (0);
+
+	spa_load_failed(spa, "multihost activity detected, "
+	    "spa_ub_txg=%llu mmp_ub_txg=%llu "
+	    "spa_ub_seq=%llu mmp_ub_seq=%llu "
+	    "spa_ub_timestamp=%llu mmp_ub_timestamp=%llu "
+	    "spa_ub_config=%#llx mmp_ub_config=%#llx",
+	    (u_longlong_t)spa_ub->ub_txg, (u_longlong_t)mmp_ub->ub_txg,
+	    (u_longlong_t)spa_ub_seq, (u_longlong_t)mmp_ub_seq,
+	    (u_longlong_t)spa_ub->ub_timestamp,
+	    (u_longlong_t)mmp_ub->ub_timestamp,
+	    (u_longlong_t)spa_ub->ub_mmp_config,
+	    (u_longlong_t)mmp_ub->ub_mmp_config);
+
+	return (1);
+}
+
+static void
+spa_ld_activity_result(spa_t *spa, int error)
+{
+	switch (error) {
+	case EREMOTEIO:
+		cmn_err(CE_WARN, "pool '%s' multihost activity detected, "
+		    "aborted pool import", spa_load_name(spa));
+		break;
+	case EINTR:
+		cmn_err(CE_WARN, "pool '%s' multihost activity check "
+		    "interactively aborted", spa_load_name(spa));
+		break;
+	case 0:
+		cmn_err(CE_NOTE, "pool '%s' multihost activity check "
+		    "completed successfully", spa_load_name(spa));
+		break;
+	}
+}
+
+
+/*
+ * Remote host activity check.  Performed during tryimport when the pool
+ * has passed on the basic sanity check and is open read-only.
  *
  * error results:
  *          0 - no activity detected
@@ -3909,16 +4040,9 @@ spa_activity_check_duration(spa_t *spa, uberblock_t *ub)
  *      EINTR - user canceled the operation
  */
 static int
-spa_activity_check(spa_t *spa, uberblock_t *ub, nvlist_t *config,
+spa_activity_check_tryimport(spa_t *spa, uberblock_t *spa_ub,
     boolean_t importing)
 {
-	uint64_t txg = ub->ub_txg;
-	uint64_t timestamp = ub->ub_timestamp;
-	uint64_t mmp_config = ub->ub_mmp_config;
-	uint16_t mmp_seq = MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0;
-	uint64_t import_delay;
-	hrtime_t import_expire, now;
-	nvlist_t *mmp_label = NULL;
 	vdev_t *rvd = spa->spa_root_vdev;
 	kcondvar_t cv;
 	kmutex_t mtx;
@@ -3928,72 +4052,44 @@ spa_activity_check(spa_t *spa, uberblock_t *ub, nvlist_t *config,
 	mutex_init(&mtx, NULL, MUTEX_DEFAULT, NULL);
 	mutex_enter(&mtx);
 
-	/*
-	 * If ZPOOL_CONFIG_MMP_TXG is present an activity check was performed
-	 * during the earlier tryimport.  If the txg recorded there is 0 then
-	 * the pool is known to be active on another host.
-	 *
-	 * Otherwise, the pool might be in use on another host.  Check for
-	 * changes in the uberblocks on disk if necessary.
-	 */
-	if (nvlist_exists(config, ZPOOL_CONFIG_LOAD_INFO)) {
-		nvlist_t *nvinfo = fnvlist_lookup_nvlist(config,
-		    ZPOOL_CONFIG_LOAD_INFO);
-
-		if (nvlist_exists(nvinfo, ZPOOL_CONFIG_MMP_TXG) &&
-		    fnvlist_lookup_uint64(nvinfo, ZPOOL_CONFIG_MMP_TXG) == 0) {
-			vdev_uberblock_load(rvd, ub, &mmp_label);
-			error = SET_ERROR(EREMOTEIO);
-			goto out;
-		}
-	}
-
-	import_delay = spa_activity_check_duration(spa, ub);
+	uint64_t import_delay = spa_activity_check_duration(spa, spa_ub);
 
 	/* Add a small random factor in case of simultaneous imports (0-25%) */
 	import_delay += import_delay * random_in_range(250) / 1000;
 
-	import_expire = gethrtime() + import_delay;
+	hrtime_t import_expire = gethrtime() + import_delay;
 
 	if (importing) {
+		hrtime_t extra_delay = MMP_IMPORT_VERIFY_ITERS *
+		    MSEC2NSEC(MMP_INTERVAL_VALID(spa_ub) ?
+		    MMP_INTERVAL(spa_ub) : MMP_MIN_INTERVAL);
 		cmn_err(CE_NOTE, "pool '%s' multihost activity check "
 		    "required, %llu seconds remaining", spa_load_name(spa),
-		    MAX((u_longlong_t)NSEC2SEC(import_delay), 1));
+		    (u_longlong_t)MAX(NSEC2SEC(import_delay + extra_delay), 1));
 		spa_import_progress_set_notes(spa, "Checking MMP activity, "
 		    "waiting %llu ms", (u_longlong_t)NSEC2MSEC(import_delay));
 	}
 
 	int iterations = 0;
-	while ((now = gethrtime()) < import_expire) {
-		if (importing && iterations++ % 30 == 0) {
-			spa_import_progress_set_notes(spa, "Checking MMP "
-			    "activity, %llu ms remaining",
-			    (u_longlong_t)NSEC2MSEC(import_expire - now));
-		}
+	hrtime_t now;
+	uberblock_t mmp_ub;
+	nvlist_t *mmp_label = NULL;
 
+	while ((now = gethrtime()) < import_expire) {
 		if (importing) {
 			(void) spa_import_progress_set_mmp_check(spa_guid(spa),
 			    NSEC2SEC(import_expire - gethrtime()));
+
+			if (++iterations % 30 == 0) {
+				spa_import_progress_set_notes(spa, "Checking "
+				    "MMP activity, %llu ms remaining",
+				    (u_longlong_t)NSEC2MSEC(import_expire-now));
+			}
 		}
 
-		vdev_uberblock_load(rvd, ub, &mmp_label);
+		vdev_uberblock_load(rvd, &mmp_ub, &mmp_label, NULL);
 
-		if (txg != ub->ub_txg || timestamp != ub->ub_timestamp ||
-		    mmp_seq != (MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0)) {
-			cmn_err(CE_WARN, "pool '%s' multihost activity "
-			    "detected, pool import aborted",
-			    spa_load_name(spa));
-			zfs_dbgmsg("mmp: multihost activity detected, "
-			    "spa=%s txg=%llu ub_txg=%llu "
-			    "timestamp=%llu ub_timestamp=%llu "
-			    "mmp_config=%#llx ub_mmp_config=%#llx",
-			    spa_load_name(spa),
-			    (u_longlong_t)txg, (u_longlong_t)ub->ub_txg,
-			    (u_longlong_t)timestamp,
-			    (u_longlong_t)ub->ub_timestamp,
-			    (u_longlong_t)mmp_config,
-			    (u_longlong_t)ub->ub_mmp_config);
-
+		if (spa_activity_compare_uberblock(spa, spa_ub, &mmp_ub)) {
 			error = SET_ERROR(EREMOTEIO);
 			break;
 		}
@@ -4011,50 +4107,204 @@ spa_activity_check(spa_t *spa, uberblock_t *ub, nvlist_t *config,
 		error = 0;
 	}
 
-out:
 	mutex_exit(&mtx);
 	mutex_destroy(&mtx);
 	cv_destroy(&cv);
-
-	/*
-	 * If the pool is determined to be active store the status in the
-	 * spa->spa_load_info nvlist.  If the remote hostname or hostid are
-	 * available from configuration read from disk store them as well.
-	 * This allows 'zpool import' to generate a more useful message.
-	 *
-	 * ZPOOL_CONFIG_MMP_STATE    - observed pool status (mandatory)
-	 * ZPOOL_CONFIG_MMP_HOSTNAME - hostname from the active pool
-	 * ZPOOL_CONFIG_MMP_HOSTID   - hostid from the active pool
-	 */
-	if (error == EREMOTEIO) {
-		if (mmp_label) {
-			if (nvlist_exists(mmp_label, ZPOOL_CONFIG_HOSTNAME)) {
-				const char *hostname = fnvlist_lookup_string(
-				    mmp_label, ZPOOL_CONFIG_HOSTNAME);
-				fnvlist_add_string(spa->spa_load_info,
-				    ZPOOL_CONFIG_MMP_HOSTNAME, hostname);
-			}
-
-			if (nvlist_exists(mmp_label, ZPOOL_CONFIG_HOSTID)) {
-				uint64_t hostid = fnvlist_lookup_uint64(
-				    mmp_label, ZPOOL_CONFIG_HOSTID);
-				fnvlist_add_uint64(spa->spa_load_info,
-				    ZPOOL_CONFIG_MMP_HOSTID, hostid);
-			}
-		}
-
-		fnvlist_add_uint64(spa->spa_load_info,
-		    ZPOOL_CONFIG_MMP_STATE, MMP_STATE_ACTIVE);
-		fnvlist_add_uint64(spa->spa_load_info,
-		    ZPOOL_CONFIG_MMP_TXG, 0);
-
-		error = spa_vdev_err(rvd, VDEV_AUX_ACTIVE, EREMOTEIO);
-	}
 
 	if (mmp_label)
 		nvlist_free(mmp_label);
 
 	return (error);
+}
+
+/*
+ * Remote host activity check.  Performed during import when the pool has
+ * passed most sanity check and has been reopened read/write.
+ *
+ * error results:
+ *          0 - no activity detected
+ *  EREMOTEIO - remote activity detected
+ *      EINTR - user canceled the operation
+ *
+ * XXX: Write out multiple leaves
+ */
+static int
+spa_activity_check_import(spa_t *spa)
+{
+	vdev_t *rvd = spa->spa_root_vdev;
+	vdev_t *spa_ub_vd = NULL;
+	nvlist_t *mmp_label;
+	uberblock_t spa_ub;
+	kcondvar_t cv;
+	kmutex_t mtx;
+	int error = 0;
+
+	cv_init(&cv, NULL, CV_DEFAULT, NULL);
+	mutex_init(&mtx, NULL, MUTEX_DEFAULT, NULL);
+	mutex_enter(&mtx);
+
+	/*
+	 * Load the best uberblock and verify it matches the uberblock
+	 * stored in the space to verify the pool has not changed.
+	 */
+	vdev_uberblock_load(rvd, &spa_ub, &mmp_label, &spa_ub_vd);
+
+	if (memcmp(&spa->spa_uberblock, &spa_ub, sizeof (uberblock_t))) {
+		spa_load_failed(spa, "mmp uberblock changed on disk");
+		error = SET_ERROR(EREMOTEIO);
+		goto out;
+	}
+
+	if (!MMP_VALID(&spa_ub) || !MMP_INTERVAL_VALID(&spa_ub) ||
+	    !MMP_SEQ_VALID(&spa_ub) || !MMP_FAIL_INT_VALID(&spa_ub)) {
+		spa_load_failed(spa, "mmp is not enabled in spa uberblock");
+		error = SET_ERROR(EREMOTEIO);
+		goto out;
+	}
+
+	nvlist_free(mmp_label);
+	mmp_label = NULL;
+
+	uint64_t spa_ub_interval = MMP_INTERVAL(&spa_ub);
+	uint16_t spa_ub_seq = MMP_SEQ(&spa_ub);
+
+	/*
+	 * Repeatedly sync out an MMP uberblock with a randomly selected
+	 * sequence number, then read it back after the MMP interval.  This
+	 * random value acts as a claim token and is visible on other hosts.
+	 * If the same random value is read back we can be certain no other
+	 * pool is attempting to import the pool.
+	 */
+	for (int i = 0; i < MMP_IMPORT_VERIFY_ITERS; i++) {
+		uberblock_t set_ub, mmp_ub;
+		vdev_t *mmp_vd;
+		uint16_t mmp_seq;
+
+		set_ub = spa_ub;
+		mmp_seq = spa_ub_seq + random_in_range(MMP_SEQ_MAX-spa_ub_seq);
+		MMP_SEQ_CLEAR(&set_ub);
+		set_ub.ub_mmp_config |= MMP_SEQ_SET(mmp_seq);
+
+		error = mmp_claim_uberblock(spa, spa_ub_vd, &set_ub);
+		if (error) {
+			spa_load_failed(spa, "mmp uberblock claim "
+			    "failed error=%d", error);
+			error = SET_ERROR(EREMOTEIO);
+			break;
+		}
+
+		spa_load_note(spa, "claiming, txg=%llu seq %llu",
+		    (u_longlong_t)set_ub.ub_txg, (u_longlong_t)mmp_seq);
+
+		error = cv_timedwait_sig(&cv, &mtx, ddi_get_lbolt() +
+		    MSEC_TO_TICK(spa_ub_interval));
+		if (error != -1) {
+			error = SET_ERROR(EINTR);
+			break;
+		}
+
+		vdev_uberblock_load(rvd, &mmp_ub, &mmp_label, &mmp_vd);
+
+		/* XXX: This may be okay once were' writing more than one */
+		if (spa_ub_vd != mmp_vd) {
+			spa_load_failed(spa, "mmp uberblock changed vdevs");
+			error = SET_ERROR(EREMOTEIO);
+			break;
+		}
+
+		if (spa_activity_compare_uberblock(spa, &set_ub, &mmp_ub)) {
+			error = SET_ERROR(EREMOTEIO);
+			break;
+		}
+
+		if (mmp_label) {
+			nvlist_free(mmp_label);
+			mmp_label = NULL;
+		}
+
+		error = 0;
+	}
+out:
+	if (error == EREMOTEIO) {
+		spa_activity_set_load_info(spa, mmp_label,
+		    MMP_STATE_ACTIVE, 0, 0);
+	}
+
+	/*
+	 * Restore the original sequence, this allows us to retry the
+	 * import proceedure if a subsequent step fails during import.
+	 */
+	int restore_error = mmp_claim_uberblock(spa, spa_ub_vd, &spa_ub);
+	if (restore_error) {
+		spa_load_failed(spa, "mmp uberblock claim "
+		    "failed error=%d", restore_error);
+	}
+
+	if (mmp_label)
+		nvlist_free(mmp_label);
+
+	mutex_exit(&mtx);
+	mutex_destroy(&mtx);
+	cv_destroy(&cv);
+
+	return (error);
+}
+
+static int
+spa_ld_activity_check(spa_t *spa, uberblock_t *ub, nvlist_t *label)
+{
+	vdev_t *rvd = spa->spa_root_vdev;
+	int error;
+
+	if (ub->ub_mmp_magic == MMP_MAGIC && ub->ub_mmp_delay &&
+	    spa_get_hostid(spa) == 0) {
+		fnvlist_add_uint64(spa->spa_load_info,
+		    ZPOOL_CONFIG_MMP_STATE, MMP_STATE_NO_HOSTID);
+		return (spa_vdev_err(rvd, VDEV_AUX_ACTIVE, EREMOTEIO));
+	}
+
+	switch (spa->spa_load_state) {
+	case SPA_LOAD_TRYIMPORT:
+tryimport:
+		error = spa_activity_check_tryimport(spa, ub, B_TRUE);
+		if (error == EREMOTEIO) {
+			spa_activity_set_load_info(spa, label,
+			    MMP_STATE_ACTIVE, 0, 0);
+			return (spa_vdev_err(rvd, VDEV_AUX_ACTIVE, EREMOTEIO));
+		} else if (error) {
+			ASSERT3S(error, ==, EINTR);
+			return (error);
+		}
+
+		spa_activity_set_load_info(spa, label, MMP_STATE_INACTIVE,
+		    ub->ub_txg, MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0);
+
+		break;
+
+	case SPA_LOAD_IMPORT:
+		error = spa_activity_verify_config(spa, ub);
+		if (error == EREMOTEIO) {
+			spa_activity_set_load_info(spa, label,
+			    MMP_STATE_ACTIVE, 0, 0);
+			return (spa_vdev_err(rvd, VDEV_AUX_ACTIVE, EREMOTEIO));
+		} else if (error) {
+			ASSERT3S(error, ==, ENOENT);
+			goto tryimport;
+		}
+
+		break;
+
+	case SPA_LOAD_RECOVER:
+		spa_load_note(spa, "skipping mmp check for rewind");
+		break;
+
+	default:
+		spa_load_failed(spa, "unreachable spa_load_state=%d",
+		    spa->spa_load_state);
+		return (spa_vdev_err(rvd, VDEV_AUX_ACTIVE, EREMOTEIO));
+	}
+
+	return (0);
 }
 
 /*
@@ -4072,7 +4322,7 @@ spa_mmp_remote_host_activity(spa_t *spa)
 	/*
 	 * Locate the best uberblock on disk
 	 */
-	vdev_uberblock_load(spa->spa_root_vdev, &best_ub, &best_label);
+	vdev_uberblock_load(spa->spa_root_vdev, &best_ub, &best_label, NULL);
 	if (best_label) {
 		/*
 		 * confirm that the best hostid matches our hostid
@@ -4109,8 +4359,7 @@ spa_mmp_remote_host_activity(spa_t *spa)
 	/*
 	 * Perform an activity check looking for any remote writer
 	 */
-	return (spa_activity_check(spa, &spa->spa_uberblock, spa->spa_config,
-	    B_FALSE) != 0);
+	return (spa_activity_check_tryimport(spa, &best_ub, B_FALSE) != 0);
 }
 
 static int
@@ -4368,10 +4617,9 @@ static int
 spa_ld_select_uberblock(spa_t *spa, spa_import_type_t type)
 {
 	vdev_t *rvd = spa->spa_root_vdev;
-	nvlist_t *config = spa->spa_config;
+	vdev_t *lvd = NULL;
 	nvlist_t *label;
 	uberblock_t *ub = &spa->spa_uberblock;
-	boolean_t activity_check = B_FALSE;
 
 	/*
 	 * If we are opening the checkpointed state of the pool by
@@ -4399,7 +4647,7 @@ spa_ld_select_uberblock(spa_t *spa, spa_import_type_t type)
 	/*
 	 * Find the best uberblock.
 	 */
-	vdev_uberblock_load(rvd, ub, &label);
+	vdev_uberblock_load(rvd, ub, &label, &lvd);
 
 	/*
 	 * If we weren't able to find a single valid uberblock, return failure.
@@ -4428,44 +4676,13 @@ spa_ld_select_uberblock(spa_t *spa, spa_import_type_t type)
 	 * pool is truly inactive and can be safely imported.  Prevent
 	 * hosts which don't have a hostid set from importing the pool.
 	 */
-	activity_check = spa_activity_check_required(spa, ub, label, config);
-	if (activity_check) {
-		int error;
-
-		if (ub->ub_mmp_magic == MMP_MAGIC && ub->ub_mmp_delay &&
-		    spa_get_hostid(spa) == 0) {
+	spa->spa_activity_check = spa_activity_check_required(spa, ub, label);
+	if (spa->spa_activity_check) {
+		int error = spa_ld_activity_check(spa, ub, label);
+		if (error) {
+			spa_ld_activity_result(spa, error);
 			nvlist_free(label);
-			fnvlist_add_uint64(spa->spa_load_info,
-			    ZPOOL_CONFIG_MMP_STATE, MMP_STATE_NO_HOSTID);
-			return (spa_vdev_err(rvd, VDEV_AUX_ACTIVE, EREMOTEIO));
-		}
-
-		error = spa_activity_check_tryconfig(ub, config);
-		if (error == 0) {
-			spa_load_note(spa, "using mmp tryimport "
-			    "state=%d ub_txg=%llu ub_seq=%u",
-			    MMP_STATE_INACTIVE, (u_longlong_t)ub->ub_txg,
-			    (unsigned)(MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0));
-		} else {
-			error = spa_activity_check(spa, ub, config, B_TRUE);
-			if (error) {
-				nvlist_free(label);
-				spa_load_failed(spa, "mmp activity check "
-				    "failed error=%d", error);
-				return (error);
-			}
-
-			fnvlist_add_uint64(spa->spa_load_info,
-			    ZPOOL_CONFIG_MMP_STATE, MMP_STATE_INACTIVE);
-			fnvlist_add_uint64(spa->spa_load_info,
-			    ZPOOL_CONFIG_MMP_TXG, ub->ub_txg);
-			fnvlist_add_uint16(spa->spa_load_info,
-			    ZPOOL_CONFIG_MMP_SEQ,
-			    (MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0));
-			spa_load_note(spa, "added mmp tryimport state=%d "
-			    "ub_txg=%llu ub_seq=%u", MMP_STATE_INACTIVE,
-			    (u_longlong_t)ub->ub_txg,
-			    (unsigned)(MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0));
+			return (error);
 		}
 	}
 
@@ -4747,6 +4964,24 @@ spa_ld_trusted_config(spa_t *spa, spa_import_type_t type,
 			    "config");
 			return (SET_ERROR(EAGAIN));
 		}
+	}
+
+	/*
+	 * Final sanity check for multihost pools that no other host is
+	 * accessing the pool.  All of the read-only check have passed at
+	 * this point, perform targetted updates to the mmp uberblocks to
+	 * safely force a visible change.
+	 */
+	if (spa->spa_load_state != SPA_LOAD_TRYIMPORT &&
+	    !spa->spa_extreme_rewind && spa->spa_activity_check) {
+
+		error = spa_activity_check_import(spa);
+		spa_ld_activity_result(spa, error);
+
+		if (error == EREMOTEIO)
+			return (spa_vdev_err(rvd, VDEV_AUX_ACTIVE, EREMOTEIO));
+		else if (error)
+			return (error);
 	}
 
 	error = spa_check_for_missing_logs(spa);
@@ -5974,13 +6209,18 @@ spa_load_best(spa_t *spa, spa_load_state_t state, uint64_t max_request,
 	load_error = rewind_error = spa_load(spa, state, SPA_IMPORT_EXISTING);
 	if (load_error == 0)
 		return (0);
-	if (load_error == ZFS_ERR_NO_CHECKPOINT) {
-		/*
-		 * When attempting checkpoint-rewind on a pool with no
-		 * checkpoint, we should not attempt to load uberblocks
-		 * from previous txgs when spa_load fails.
-		 */
+
+	/* Do not attempt to load uberblocks from previous txgs when: */
+	switch (load_error) {
+	case ZFS_ERR_NO_CHECKPOINT:
+		/* Attempting checkpoint-rewind on a pool with no checkpoint */
 		ASSERT(spa->spa_import_flags & ZFS_IMPORT_CHECKPOINT);
+		zfs_fallthrough;
+	case EREMOTEIO:
+		/* MMP determines the pool is active on another host */
+		zfs_fallthrough;
+	case EINTR:
+		/* The user interactively interrupted the import */
 		spa_import_progress_remove(spa_guid(spa));
 		return (load_error);
 	}
@@ -7042,7 +7282,7 @@ spa_import(char *pool, nvlist_t *config, nvlist_t *props, uint64_t flags)
 
 	if (state != SPA_LOAD_RECOVER) {
 		spa->spa_last_ubsync_txg = spa->spa_load_txg = 0;
-		zfs_dbgmsg("spa_import: importing %s", pool);
+		zfs_dbgmsg("spa_import: importing %s,", pool);
 	} else {
 		zfs_dbgmsg("spa_import: importing %s, max_txg=%lld "
 		    "(RECOVERY MODE)", pool, (longlong_t)policy.zlp_txg);

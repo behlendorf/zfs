@@ -540,6 +540,36 @@ mmp_write_uberblock(spa_t *spa)
 	zio_nowait(zio);
 }
 
+int
+mmp_claim_uberblock(spa_t *spa, vdev_t *vd, uberblock_t *ub)
+{
+	int flags = ZIO_FLAG_CONFIG_WRITER | ZIO_FLAG_CANFAIL;
+
+	ASSERT(MMP_VALID(ub));
+	ASSERT(MMP_SEQ_VALID(ub));
+	ASSERT(vd->vdev_ops->vdev_op_leaf);
+
+	spa_config_enter(spa, SCL_ALL, mmp_tag, RW_WRITER);
+
+	zio_t *zio = zio_root(spa, NULL, NULL, flags);
+	abd_t *ub_abd = abd_alloc_for_io(VDEV_UBERBLOCK_SIZE(vd), B_TRUE);
+	abd_copy_from_buf(ub_abd, ub, sizeof (uberblock_t));
+	abd_zero_off(ub_abd, sizeof (uberblock_t),
+	    VDEV_UBERBLOCK_SIZE(vd) - sizeof (uberblock_t));
+
+	vdev_label_write(zio, vd, 0, ub_abd,
+	    VDEV_UBERBLOCK_OFFSET(vd, VDEV_UBERBLOCK_COUNT(vd) -
+	    MMP_BLOCKS_PER_LABEL), VDEV_UBERBLOCK_SIZE(vd), NULL, NULL,
+	    flags | ZIO_FLAG_DONT_PROPAGATE);
+
+	int error = zio_wait(zio);
+
+	abd_free(ub_abd);
+	spa_config_exit(spa, SCL_ALL, mmp_tag);
+
+	return (error);
+}
+
 static __attribute__((noreturn)) void
 mmp_thread(void *arg)
 {

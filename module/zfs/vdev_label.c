@@ -1593,7 +1593,8 @@ vdev_uberblock_load_impl(zio_t *zio, vdev_t *vd, int flags,
  * Then, we read the configuration from the same vdev as the best uberblock.
  */
 void
-vdev_uberblock_load(vdev_t *rvd, uberblock_t *ub, nvlist_t **config)
+vdev_uberblock_load(vdev_t *rvd, uberblock_t *ub, nvlist_t **config,
+    vdev_t **vd)
 {
 	zio_t *zio;
 	spa_t *spa = rvd->vdev_spa;
@@ -1607,6 +1608,9 @@ vdev_uberblock_load(vdev_t *rvd, uberblock_t *ub, nvlist_t **config)
 	memset(ub, 0, sizeof (uberblock_t));
 	memset(&cb, 0, sizeof (cb));
 	*config = NULL;
+
+	if (vd != NULL)
+		*vd = NULL;
 
 	cb.ubl_ubbest = ub;
 
@@ -1622,8 +1626,10 @@ vdev_uberblock_load(vdev_t *rvd, uberblock_t *ub, nvlist_t **config)
 	 * matches the txg for our uberblock.
 	 */
 	if (cb.ubl_vd != NULL) {
-		vdev_dbgmsg(cb.ubl_vd, "best uberblock found for spa %s. "
-		    "txg %llu", spa_load_name(spa), (u_longlong_t)ub->ub_txg);
+		vdev_dbgmsg(cb.ubl_vd, "best uberblock found for spa %s, "
+		    "txg=%llu seq=%llu", spa_load_name(spa),
+		    (u_longlong_t)ub->ub_txg,
+		    (u_longlong_t)(MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0));
 
 		if (ub->ub_raidz_reflow_info !=
 		    cb.ubl_latest.ub_raidz_reflow_info) {
@@ -1640,6 +1646,9 @@ vdev_uberblock_load(vdev_t *rvd, uberblock_t *ub, nvlist_t **config)
 			spa_config_exit(spa, SCL_ALL, FTAG);
 			return;
 		}
+
+		if (vd != NULL)
+			*vd = cb.ubl_vd;
 
 		*config = vdev_label_read_config(cb.ubl_vd, ub->ub_txg);
 		if (*config == NULL && spa->spa_extreme_rewind) {
