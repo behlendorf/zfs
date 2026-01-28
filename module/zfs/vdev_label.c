@@ -1491,7 +1491,7 @@ vdev_label_write_bootenv(vdev_t *vd, nvlist_t *env)
  * conflicting uberblocks on disk with the same txg.  The solution is simple:
  * among uberblocks with equal txg, choose the one with the latest timestamp.
  */
-static int
+int
 vdev_uberblock_compare(const uberblock_t *ub1, const uberblock_t *ub2)
 {
 	int cmp = TREE_CMP(ub1->ub_txg, ub2->ub_txg);

@@ -3980,36 +3980,6 @@ spa_activity_set_load_info(spa_t *spa, nvlist_t *label, mmp_state_t state,
 	    (u_longlong_t)seq);
 }
 
-/*
- * Compares the txg, sequence, and timestamp of two uberblocks while
- * ignoring other differences.
- */
-static int
-spa_activity_compare_uberblock(spa_t *spa, uberblock_t *spa_ub,
-    uberblock_t *mmp_ub)
-{
-	uint16_t spa_ub_seq = MMP_SEQ_VALID(spa_ub) ? MMP_SEQ(spa_ub) : 0;
-	uint16_t mmp_ub_seq = MMP_SEQ_VALID(mmp_ub) ? MMP_SEQ(mmp_ub) : 0;
-
-	if (spa_ub->ub_txg == mmp_ub->ub_txg && spa_ub_seq == mmp_ub_seq &&
-	    spa_ub->ub_timestamp == mmp_ub->ub_timestamp)
-		return (0);
-
-	spa_load_failed(spa, "multihost activity detected, "
-	    "spa_ub_txg=%llu mmp_ub_txg=%llu "
-	    "spa_ub_seq=%llu mmp_ub_seq=%llu "
-	    "spa_ub_timestamp=%llu mmp_ub_timestamp=%llu "
-	    "spa_ub_config=%#llx mmp_ub_config=%#llx",
-	    (u_longlong_t)spa_ub->ub_txg, (u_longlong_t)mmp_ub->ub_txg,
-	    (u_longlong_t)spa_ub_seq, (u_longlong_t)mmp_ub_seq,
-	    (u_longlong_t)spa_ub->ub_timestamp,
-	    (u_longlong_t)mmp_ub->ub_timestamp,
-	    (u_longlong_t)spa_ub->ub_mmp_config,
-	    (u_longlong_t)mmp_ub->ub_mmp_config);
-
-	return (1);
-}
-
 static void
 spa_ld_activity_result(spa_t *spa, int error)
 {
@@ -4089,7 +4059,22 @@ spa_activity_check_tryimport(spa_t *spa, uberblock_t *spa_ub,
 
 		vdev_uberblock_load(rvd, &mmp_ub, &mmp_label, NULL);
 
-		if (spa_activity_compare_uberblock(spa, spa_ub, &mmp_ub)) {
+		if (vdev_uberblock_compare(spa_ub, &mmp_ub)) {
+			spa_load_failed(spa, "tryimport activity detected, "
+			    "spa_ub_txg=%llu mmp_ub_txg=%llu "
+			    "spa_ub_seq=%llu mmp_ub_seq=%llu "
+			    "spa_ub_timestamp=%llu mmp_ub_timestamp=%llu "
+			    "spa_ub_config=%#llx mmp_ub_config=%#llx",
+			    (u_longlong_t)spa_ub->ub_txg,
+			    (u_longlong_t)mmp_ub.ub_txg,
+			    (u_longlong_t)(MMP_SEQ_VALID(spa_ub) ?
+			    MMP_SEQ(spa_ub) : 0),
+			    (u_longlong_t)(MMP_SEQ_VALID(&mmp_ub) ?
+			    MMP_SEQ(&mmp_ub) : 0),
+			    (u_longlong_t)spa_ub->ub_timestamp,
+			    (u_longlong_t)mmp_ub.ub_timestamp,
+			    (u_longlong_t)spa_ub->ub_mmp_config,
+			    (u_longlong_t)mmp_ub.ub_mmp_config);
 			error = SET_ERROR(EREMOTEIO);
 			break;
 		}
@@ -4212,7 +4197,22 @@ spa_activity_check_import(spa_t *spa)
 			break;
 		}
 
-		if (spa_activity_compare_uberblock(spa, &set_ub, &mmp_ub)) {
+		if (vdev_uberblock_compare(&set_ub, &mmp_ub)) {
+			spa_load_failed(spa, "import activity detected, "
+			    "set_ub_txg=%llu mmp_ub_txg=%llu "
+			    "set_ub_seq=%llu mmp_ub_seq=%llu "
+			    "set_ub_timestamp=%llu mmp_ub_timestamp=%llu "
+			    "set_ub_config=%#llx mmp_ub_config=%#llx",
+			    (u_longlong_t)set_ub.ub_txg,
+			    (u_longlong_t)mmp_ub.ub_txg,
+			    (u_longlong_t)(MMP_SEQ_VALID(&set_ub) ?
+			    MMP_SEQ(&set_ub) : 0),
+			    (u_longlong_t)(MMP_SEQ_VALID(&mmp_ub) ?
+			    MMP_SEQ(&mmp_ub) : 0),
+			    (u_longlong_t)set_ub.ub_timestamp,
+			    (u_longlong_t)mmp_ub.ub_timestamp,
+			    (u_longlong_t)set_ub.ub_mmp_config,
+			    (u_longlong_t)mmp_ub.ub_mmp_config);
 			error = SET_ERROR(EREMOTEIO);
 			break;
 		}
