@@ -540,18 +540,49 @@ mmp_write_uberblock(spa_t *spa)
 	zio_nowait(zio);
 }
 
-int
-mmp_claim_uberblock(spa_t *spa, vdev_t *vd, uberblock_t *ub)
+static void
+mmp_claim_uberblock_sync_done(zio_t *zio)
 {
-	int flags = ZIO_FLAG_CONFIG_WRITER | ZIO_FLAG_CANFAIL;
+	uint64_t *good_writes = zio->io_private;
 
-	ASSERT(MMP_VALID(ub));
-	ASSERT(MMP_SEQ_VALID(ub));
-	ASSERT(vd->vdev_ops->vdev_op_leaf);
+	if (zio->io_error == 0 && zio->io_vd->vdev_top->vdev_ms_array != 0)
+		atomic_inc_64(good_writes);
+}
 
-	spa_config_enter(spa, SCL_ALL, mmp_tag, RW_WRITER);
+/*
+ * Write the uberblock to the first label of all leaves of the specified vdev.
+ */
+static void
+mmp_claim_uberblock_sync(zio_t *zio, uint64_t *good_writes,
+    uint64_t *req_writes, uberblock_t *ub, vdev_t *vd, int flags)
+{
+	for (uint64_t c = 0; c < vd->vdev_children; c++) {
+		vdev_t *cvd = vd->vdev_child[c];
 
-	zio_t *zio = zio_root(spa, NULL, NULL, flags);
+		if (cvd->vdev_islog || cvd->vdev_isspare || cvd->vdev_isl2cache)
+			continue;
+
+		if (cvd->vdev_top == cvd) {
+			uint64_t nparity = vdev_get_nparity(cvd);
+			if (nparity)
+				*req_writes += nparity + 1;
+			else
+				*req_writes += MIN(cvd->vdev_children, 2);
+		}
+
+		mmp_claim_uberblock_sync(zio, good_writes, req_writes,
+		    ub, cvd, flags);
+	}
+
+	if (!vd->vdev_ops->vdev_op_leaf)
+		return;
+
+	if (!vdev_writeable(vd))
+		return;
+
+	if (vd->vdev_ops == &vdev_draid_spare_ops)
+		return;
+
 	abd_t *ub_abd = abd_alloc_for_io(VDEV_UBERBLOCK_SIZE(vd), B_TRUE);
 	abd_copy_from_buf(ub_abd, ub, sizeof (uberblock_t));
 	abd_zero_off(ub_abd, sizeof (uberblock_t),
@@ -559,15 +590,52 @@ mmp_claim_uberblock(spa_t *spa, vdev_t *vd, uberblock_t *ub)
 
 	vdev_label_write(zio, vd, 0, ub_abd,
 	    VDEV_UBERBLOCK_OFFSET(vd, VDEV_UBERBLOCK_COUNT(vd) -
-	    MMP_BLOCKS_PER_LABEL), VDEV_UBERBLOCK_SIZE(vd), NULL, NULL,
+	    MMP_BLOCKS_PER_LABEL), VDEV_UBERBLOCK_SIZE(vd),
+	    mmp_claim_uberblock_sync_done, good_writes,
 	    flags | ZIO_FLAG_DONT_PROPAGATE);
 
-	int error = zio_wait(zio);
-
 	abd_free(ub_abd);
+}
+
+int
+mmp_claim_uberblock(spa_t *spa, vdev_t *vd, uberblock_t *ub)
+{
+	int flags = ZIO_FLAG_CONFIG_WRITER | ZIO_FLAG_CANFAIL;
+	uint64_t good_writes = 0;
+	uint64_t req_writes = 0;
+	zio_t *zio;
+
+	ASSERT(MMP_VALID(ub));
+	ASSERT(MMP_SEQ_VALID(ub));
+
+	spa_config_enter(spa, SCL_ALL, mmp_tag, RW_WRITER);
+
+	/* Sync the uberblock to all writeable leaves */
+	zio = zio_root(spa, NULL, NULL, flags);
+	mmp_claim_uberblock_sync(zio, &good_writes, &req_writes, ub, vd, flags);
+	(void) zio_wait(zio);
+
+	/* Flush the new uberblocks so they're immediately visible */
+	zio = zio_root(spa, NULL, NULL, flags);
+	zio_flush(zio, vd);
+	(void) zio_wait(zio);
+
 	spa_config_exit(spa, SCL_ALL, mmp_tag);
 
-	return (error);
+	spa_load_note(spa, "claiming, txg=%llu seq=%llu "
+	    "req_writes=%llu good_writes=%llu",
+	    (u_longlong_t)ub->ub_txg, (u_longlong_t)MMP_SEQ(ub),
+	    (u_longlong_t)req_writes, (u_longlong_t)good_writes);
+
+	/*
+	 * To guarentee visibility from a remote host we require a minimum
+	 * number of good writes. For raidz/draid vdevs parity+1 writes, for
+	 * mirrors 2 writes, and for singletons 1 write.
+	 */
+	if (req_writes == 0 || good_writes < req_writes)
+		return (SET_ERROR(EIO));
+
+	return (0);
 }
 
 static __attribute__((noreturn)) void

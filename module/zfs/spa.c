@@ -4170,16 +4170,13 @@ spa_activity_check_import(spa_t *spa)
 		MMP_SEQ_CLEAR(&set_ub);
 		set_ub.ub_mmp_config |= MMP_SEQ_SET(mmp_seq);
 
-		error = mmp_claim_uberblock(spa, spa_ub_vd, &set_ub);
+		error = mmp_claim_uberblock(spa, rvd, &set_ub);
 		if (error) {
 			spa_load_failed(spa, "mmp uberblock claim "
 			    "failed error=%d", error);
 			error = SET_ERROR(EREMOTEIO);
 			break;
 		}
-
-		spa_load_note(spa, "claiming, txg=%llu seq %llu",
-		    (u_longlong_t)set_ub.ub_txg, (u_longlong_t)mmp_seq);
 
 		error = cv_timedwait_sig(&cv, &mtx, ddi_get_lbolt() +
 		    MSEC_TO_TICK(spa_ub_interval));
@@ -4189,13 +4186,6 @@ spa_activity_check_import(spa_t *spa)
 		}
 
 		vdev_uberblock_load(rvd, &mmp_ub, &mmp_label, &mmp_vd);
-
-		/* XXX: This may be okay once were' writing more than one */
-		if (spa_ub_vd != mmp_vd) {
-			spa_load_failed(spa, "mmp uberblock changed vdevs");
-			error = SET_ERROR(EREMOTEIO);
-			break;
-		}
 
 		if (vdev_uberblock_compare(&set_ub, &mmp_ub)) {
 			spa_load_failed(spa, "import activity detected, "
@@ -4234,7 +4224,7 @@ out:
 	 * Restore the original sequence, this allows us to retry the
 	 * import proceedure if a subsequent step fails during import.
 	 */
-	int restore_error = mmp_claim_uberblock(spa, spa_ub_vd, &spa_ub);
+	int restore_error = mmp_claim_uberblock(spa, rvd, &spa_ub);
 	if (restore_error) {
 		spa_load_failed(spa, "mmp uberblock claim "
 		    "failed error=%d", restore_error);
