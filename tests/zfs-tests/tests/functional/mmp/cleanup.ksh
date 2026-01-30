@@ -24,6 +24,10 @@
 
 verify_runnable "global"
 
+if [ -e $HOSTID_FILE.save ]; then
+	mv -f ${HOSTID_FILE}.save $HOSTID_FILE
+fi
+
 log_must set_tunable64 MULTIHOST_HISTORY $MMP_HISTORY_OFF
 
 log_pass "mmp cleanup passed"
