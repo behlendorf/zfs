@@ -1482,36 +1482,33 @@ zpool_is_draid_spare(const char *name)
  * Extract device-specific error information from a failed pool creation.
  * If the kernel returned ZPOOL_CONFIG_CREATE_INFO in the ioctl output,
  * set an appropriate error aux message identifying the problematic device.
- *
- * Returns B_TRUE if device-specific info was found and the error aux
- * message was set, B_FALSE otherwise.
  */
-static boolean_t
+static int
 zpool_create_info(libzfs_handle_t *hdl, zfs_cmd_t *zc)
 {
 	nvlist_t *outnv = NULL;
-	nvlist_t *errinfo = NULL;
+	nvlist_t *info = NULL;
 	const char *vdev = NULL;
 	const char *pname = NULL;
-	boolean_t found = B_FALSE;
 
 	if (zc->zc_nvlist_dst_size == 0)
-		return (B_FALSE);
+		return (ENOENT);
 
 	if (nvlist_unpack((void *)(uintptr_t)zc->zc_nvlist_dst,
 	    zc->zc_nvlist_dst_size, &outnv, 0) != 0 || outnv == NULL)
-		return (B_FALSE);
+		return (EINVAL);
 
-	if (nvlist_lookup_nvlist(outnv,
-	    ZPOOL_CONFIG_CREATE_INFO, &errinfo) != 0)
-		goto out;
+	if (nvlist_lookup_nvlist(outnv, ZPOOL_CONFIG_CREATE_INFO, &info) != 0) {
+		nvlist_free(outnv);
+		return (EINVAL);
+	}
 
-	if (nvlist_lookup_string(errinfo,
-	    ZPOOL_CREATE_INFO_VDEV, &vdev) != 0)
-		goto out;
+	if (nvlist_lookup_string(info, ZPOOL_CREATE_INFO_VDEV, &vdev) != 0) {
+		nvlist_free(outnv);
+		return (EINVAL);
+	}
 
-	if (nvlist_lookup_string(errinfo,
-	    ZPOOL_CREATE_INFO_POOL, &pname) == 0) {
+	if (nvlist_lookup_string(info, ZPOOL_CREATE_INFO_POOL, &pname) == 0) {
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 		    "device '%s' is part of active pool '%s'"),
 		    vdev, pname);
@@ -1519,11 +1516,8 @@ zpool_create_info(libzfs_handle_t *hdl, zfs_cmd_t *zc)
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 		    "device '%s' is in use"), vdev);
 	}
-	found = B_TRUE;
 
-out:
-	nvlist_free(outnv);
-	return (found);
+	return (0);
 }
 
 /*
@@ -1608,25 +1602,6 @@ zpool_create(libzfs_handle_t *hdl, const char *pool, nvlist_t *nvroot,
 	zcmd_alloc_dst_nvlist(hdl, &zc, 4096);
 
 	if ((ret = zfs_ioctl(hdl, ZFS_IOC_POOL_CREATE, &zc)) != 0) {
-
-		if (zpool_create_info(hdl, &zc)) {
-			zcmd_free_nvlists(&zc);
-			nvlist_free(zc_props);
-			nvlist_free(zc_fsprops);
-			nvlist_free(hidden_args);
-			if (wkeydata != NULL)
-				free(wkeydata);
-			return (zfs_error(hdl,
-			    EZFS_BADDEV, errbuf));
-		}
-
-		zcmd_free_nvlists(&zc);
-		nvlist_free(zc_props);
-		nvlist_free(zc_fsprops);
-		nvlist_free(hidden_args);
-		if (wkeydata != NULL)
-			free(wkeydata);
-
 		switch (errno) {
 		case EBUSY:
 			/*
@@ -1640,7 +1615,8 @@ zpool_create(libzfs_handle_t *hdl, const char *pool, nvlist_t *nvroot,
 			    "one or more vdevs refer to the same device, or "
 			    "one of\nthe devices is part of an active md or "
 			    "lvm device"));
-			return (zfs_error(hdl, EZFS_BADDEV, errbuf));
+			ret = zfs_error(hdl, EZFS_BADDEV, errbuf);
+			break;
 
 		case ERANGE:
 			/*
@@ -1655,7 +1631,8 @@ zpool_create(libzfs_handle_t *hdl, const char *pool, nvlist_t *nvroot,
 			 */
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 			    "record size invalid"));
-			return (zfs_error(hdl, EZFS_BADPROP, errbuf));
+			ret = zfs_error(hdl, EZFS_BADPROP, errbuf);
+			break;
 
 		case EOVERFLOW:
 			/*
@@ -1674,12 +1651,14 @@ zpool_create(libzfs_handle_t *hdl, const char *pool, nvlist_t *nvroot,
 				    "one or more devices is less than the "
 				    "minimum size (%s)"), buf);
 			}
-			return (zfs_error(hdl, EZFS_BADDEV, errbuf));
+			ret = zfs_error(hdl, EZFS_BADDEV, errbuf);
+			break;
 
 		case ENOSPC:
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 			    "one or more devices is out of space"));
-			return (zfs_error(hdl, EZFS_BADDEV, errbuf));
+			ret = zfs_error(hdl, EZFS_BADDEV, errbuf);
+			break;
 
 		case EINVAL:
 			if (zpool_has_draid_vdev(nvroot) &&
@@ -1687,19 +1666,26 @@ zpool_create(libzfs_handle_t *hdl, const char *pool, nvlist_t *nvroot,
 				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 				    "dRAID vdevs are unsupported by the "
 				    "kernel"));
-				return (zfs_error(hdl, EZFS_BADDEV, errbuf));
+				ret = zfs_error(hdl, EZFS_BADDEV, errbuf);
 			} else {
-				return (zpool_standard_error(hdl, errno,
-				    errbuf));
+				ret = zpool_standard_error(hdl, errno, errbuf);
 			}
+			break;
 
 		case ENXIO:
-			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
-			    "one or more devices could not be opened"));
-			return (zfs_error(hdl, EZFS_BADDEV, errbuf));
+			ret = zpool_create_info(hdl, &zc);
+			if (ret == 0) {
+				ret = zfs_error(hdl, EZFS_BADDEV, errbuf);
+			} else {
+				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+				    "one or more devices could not be opened"));
+				ret = zfs_error(hdl, EZFS_BADDEV, errbuf);
+			}
+			break;
 
 		default:
-			return (zpool_standard_error(hdl, errno, errbuf));
+			ret = zpool_standard_error(hdl, errno, errbuf);
+			break;
 		}
 	}
 
