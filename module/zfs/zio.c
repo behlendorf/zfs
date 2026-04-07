@@ -4809,6 +4809,12 @@ zio_vdev_io_start(zio_t *zio)
 	}
 
 	vd->vdev_ops->vdev_op_io_start(zio);
+
+	if (vd->vdev_ops->vdev_op_leaf &&
+	    (zio->io_flags & ZIO_FLAG_BYPASSED_QUEUE)) {
+		return (zio);
+	}
+
 	return (NULL);
 }
 
