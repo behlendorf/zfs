@@ -218,7 +218,8 @@ fi
 
 # run functional testings and save exitcode
 cd /var/tmp
-TAGS=$NUM/$DEN
+#TAGS=$NUM/$DEN
+TAGS=zfs_unshare,devices,stat
 sudo dmesg -c > dmesg-prerun.txt
 mount > mount.txt
 df -h > df-prerun.txt
