@@ -14,7 +14,6 @@
  * All rights reserved.
  *
  * Portions Copyright (c) 2012 Martin Matuska <mm@FreeBSD.org>
- * Copyright (c) 2026, TrueNAS.
  */
 
 #include <sys/zfs_context.h>
@@ -199,45 +198,8 @@ vdev_geom_orphan(struct g_consumer *cp)
 	}
 }
 
-/*
- * Ensure the supplied credential has access to the /dev node for this
- * provider. geom itself has no access control capability, so this is all
- * we can do. This of course won't work if there is an attempt to use a
- * geom provider that genuinely has no node, or its tested before /dev
- * is available. That seems better than allowing access to things they
- * shouldn't have, We shall see.
- */
-static bool
-vdev_geom_can_access(struct g_provider *pp, cred_t *cr)
-{
-	struct nameidata nd;
-	struct vnode *vp;
-
-	ASSERT3P(cr, !=, NULL);
-	g_topology_assert_not();
-
-	NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, "/dev");
-	if (namei(&nd) != 0)
-		return (false);
-	NDFREE_PNBUF(&nd);
-
-	vp = nd.ni_vp;
-	NDINIT_ATVP(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, pp->name, vp);
-	if (namei(&nd) != 0)
-		return (false);
-	NDFREE_PNBUF(&nd);
-	vrele(vp);
-
-	vp = nd.ni_vp;
-	bool can_access = (VOP_ACCESS(vp, VREAD|VWRITE, cr, curthread) == 0);
-	vrele(vp);
-
-	return (can_access);
-}
-
 static struct g_consumer *
-vdev_geom_attach(struct g_provider *pp, vdev_t *vd, boolean_t sanity,
-    cred_t *cr)
+vdev_geom_attach(struct g_provider *pp, vdev_t *vd, boolean_t sanity)
 {
 	struct g_geom *gp;
 	struct g_consumer *cp;
@@ -246,19 +208,6 @@ vdev_geom_attach(struct g_provider *pp, vdev_t *vd, boolean_t sanity,
 	g_topology_assert();
 
 	ZFS_LOG(1, "Attaching to %s.", pp->name);
-
-	if (cr != NULL && cr != kcred) {
-		/* If no cred or non-kernel cred supplied, check access. */
-		g_topology_unlock();
-		bool can_access = vdev_geom_can_access(pp, cr);
-		g_topology_lock();
-		if (!can_access) {
-			ZFS_LOG(1, "Failing attach of %s. "
-			    "No access to dev node.\n",
-			    pp->name);
-			return (NULL);
-		}
-	}
 
 	if (sanity) {
 		if (pp->sectorsize > VDEV_PAD_SIZE || !ISP2(pp->sectorsize)) {
@@ -651,11 +600,7 @@ vdev_geom_read_pool_label(const char *name,
 			LIST_FOREACH(pp, &gp->provider, provider) {
 				if (pp->flags & G_PF_WITHER)
 					continue;
-				/*
-				 * no cred, because this is during early boot
-				 * and there's no /dev nodes to check yet.
-				 */
-				zcp = vdev_geom_attach(pp, NULL, B_TRUE, NULL);
+				zcp = vdev_geom_attach(pp, NULL, B_TRUE);
 				if (zcp == NULL)
 					continue;
 				g_topology_unlock();
@@ -688,14 +633,14 @@ enum match {
 };
 
 static enum match
-vdev_attach_ok(vdev_t *vd, struct g_provider *pp, cred_t *cr)
+vdev_attach_ok(vdev_t *vd, struct g_provider *pp)
 {
 	nvlist_t *config;
 	uint64_t pool_guid, top_guid, vdev_guid;
 	struct g_consumer *cp;
 	int nlabels;
 
-	cp = vdev_geom_attach(pp, NULL, B_TRUE, cr);
+	cp = vdev_geom_attach(pp, NULL, B_TRUE);
 	if (cp == NULL) {
 		ZFS_LOG(1, "Unable to attach tasting instance to %s.",
 		    pp->name);
@@ -747,7 +692,7 @@ vdev_attach_ok(vdev_t *vd, struct g_provider *pp, cred_t *cr)
 }
 
 static struct g_consumer *
-vdev_geom_attach_by_guids(vdev_t *vd, cred_t *cr)
+vdev_geom_attach_by_guids(vdev_t *vd)
 {
 	struct g_class *mp;
 	struct g_geom *gp;
@@ -769,7 +714,7 @@ vdev_geom_attach_by_guids(vdev_t *vd, cred_t *cr)
 			if (gp->flags & G_GEOM_WITHER)
 				continue;
 			LIST_FOREACH(pp, &gp->provider, provider) {
-				match = vdev_attach_ok(vd, pp, cr);
+				match = vdev_attach_ok(vd, pp);
 				if (match > best_match) {
 					best_match = match;
 					best_pp = pp;
@@ -786,7 +731,7 @@ vdev_geom_attach_by_guids(vdev_t *vd, cred_t *cr)
 
 out:
 	if (best_pp) {
-		cp = vdev_geom_attach(best_pp, vd, B_TRUE, cr);
+		cp = vdev_geom_attach(best_pp, vd, B_TRUE);
 		if (cp == NULL) {
 			printf("ZFS WARNING: Unable to attach to %s.\n",
 			    best_pp->name);
@@ -796,7 +741,7 @@ out:
 }
 
 static struct g_consumer *
-vdev_geom_open_by_guids(vdev_t *vd, cred_t *cr)
+vdev_geom_open_by_guids(vdev_t *vd)
 {
 	struct g_consumer *cp;
 	char *buf;
@@ -806,7 +751,7 @@ vdev_geom_open_by_guids(vdev_t *vd, cred_t *cr)
 
 	ZFS_LOG(1, "Searching by guids [%ju:%ju].",
 	    (uintmax_t)spa_guid(vd->vdev_spa), (uintmax_t)vd->vdev_guid);
-	cp = vdev_geom_attach_by_guids(vd, cr);
+	cp = vdev_geom_attach_by_guids(vd);
 	if (cp != NULL) {
 		len = strlen(cp->provider->name) + strlen("/dev/") + 1;
 		buf = kmem_alloc(len, KM_SLEEP);
@@ -828,7 +773,7 @@ vdev_geom_open_by_guids(vdev_t *vd, cred_t *cr)
 }
 
 static struct g_consumer *
-vdev_geom_open_by_path(vdev_t *vd, int check_guid, cred_t *cr)
+vdev_geom_open_by_path(vdev_t *vd, int check_guid)
 {
 	struct g_provider *pp;
 	struct g_consumer *cp;
@@ -839,8 +784,8 @@ vdev_geom_open_by_path(vdev_t *vd, int check_guid, cred_t *cr)
 	pp = g_provider_by_name(vd->vdev_path + sizeof ("/dev/") - 1);
 	if (pp != NULL) {
 		ZFS_LOG(1, "Found provider by name %s.", vd->vdev_path);
-		if (!check_guid || vdev_attach_ok(vd, pp, cr) == FULL_MATCH)
-			cp = vdev_geom_attach(pp, vd, B_FALSE, cr);
+		if (!check_guid || vdev_attach_ok(vd, pp) == FULL_MATCH)
+			cp = vdev_geom_attach(pp, vd, B_FALSE);
 	}
 
 	return (cp);
@@ -850,6 +795,7 @@ static int
 vdev_geom_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
     uint64_t *logical_ashift, uint64_t *physical_ashift, cred_t *cr)
 {
+	(void) cr;
 	struct g_provider *pp;
 	struct g_consumer *cp;
 	int error, has_trim;
@@ -901,13 +847,13 @@ vdev_geom_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 		 *           unless we are doing a split, in which case we
 		 *           should allow any guid.
 		 */
-		cp = vdev_geom_open_by_path(vd, 0, cr);
+		cp = vdev_geom_open_by_path(vd, 0);
 	} else {
 		/*
 		 * Try using the recorded path for this device, but only
 		 * accept it if its label data contains the expected GUIDs.
 		 */
-		cp = vdev_geom_open_by_path(vd, 1, cr);
+		cp = vdev_geom_open_by_path(vd, 1);
 		if (cp == NULL) {
 			/*
 			 * The device at vd->vdev_path doesn't have the
@@ -915,7 +861,7 @@ vdev_geom_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 			 * moved around so try all other GEOM providers
 			 * to find one with the right GUIDs.
 			 */
-			cp = vdev_geom_open_by_guids(vd, cr);
+			cp = vdev_geom_open_by_guids(vd);
 		}
 	}
 
